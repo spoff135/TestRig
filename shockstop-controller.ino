@@ -1,7 +1,7 @@
 //UBIDOTS CODE
 #include "HttpClient.h"
 // if using webIDE, use this: #include "HttpClient/HttpClient.h"
-#define TOKEN "Me72mxyaIELmctKM81Y0DVY3MTUJ4z"
+#define UBIDOTS_TOKEN "Me72mxyaIELmctKM81Y0DVY3MTUJ4z"
 #define WEB_DEFLECTION_AVG "56b671fb76254228866ee416"
 #define WEB_DEFLECTION "56cc63b6762542644cc8d2ef"
 #define WEB_CYCLES "56b672cb7625422dd8dbbf52"
@@ -184,14 +184,10 @@ void setup()
     forceSetting = 0;
     delay(500);
 
-    BlinkD7(5,250);
-
     // Initialize neutral values
     ReadInputPins();
     compressorStartTime = millis();
     compressorStopTime = millis();
-
-    BlinkD7(5,250);
 
     //UBIDOTS CODE
     request.hostname = "things.ubidots.com";
@@ -280,8 +276,6 @@ void loop()
     if(paused){
         PauseAll();
     }
-
-    BlinkD7(2,150);
 
 }// loop
 
@@ -772,7 +766,7 @@ void UpdateDashboard(){
 /*Working code
             // send deflection avg
             request.body = "{\"value\":" + String(deflectionAvg,3) + "}";
-            request.path = "/api/v1.6/variables/"WEBDEFLECTION"/values?token="TOKEN;
+            request.path = "/api/v1.6/variables/"WEBDEFLECTION"/values?token="UBIDOTS_TOKEN;
 */
 
             dashboardUpdateCount++;
@@ -780,7 +774,7 @@ void UpdateDashboard(){
         else{
             // send cycleCount
             request.body = "{\"value\":" + String(cycleCount) + "}";
-            request.path = "/api/v1.6/variables/"WEB_CYCLES"/values?token="TOKEN;
+            request.path = "/api/v1.6/variables/"WEB_CYCLES"/values?token="UBIDOTS_TOKEN;
             http.post(request, response, headers);
 
             dashboardUpdateCount = 0;
@@ -1491,7 +1485,6 @@ int WebSetTimeout(String tStr){
         return stateTimeout[0];
     }
 }// WebSetTimeout
-
 
 
 //------------------------------------------------------------------------
