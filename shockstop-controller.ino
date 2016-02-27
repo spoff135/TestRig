@@ -960,10 +960,21 @@ void GenerateFvD(){
 void GenerateElastomerFvD(){
 
     int originalForceSetting = forceSetting; // record original force setting to reset to after test
+    // Record max up position
+    SetForce(20);
+    PushUp();
+    delay(1000);
+    ReadInputPins();
+    PrintDiagnostic("Up");
+    PrintStatusToLCD("Up");
+
+    // Record "neutral" position
     ResetNeutral();
     ReadInputPins();
     PrintDiagnostic("Neutral");
     PrintStatusToLCD("Neutral");
+
+    // Record position every 5 lbs
     int highLoadDelay = 0;
     for(i=10; i<=maxTestLoad_Elastomer; i+=5){
         forceSetting = i;
