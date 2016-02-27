@@ -1,14 +1,21 @@
 //UBIDOTS CODE
 #include "HttpClient.h"
+// if using webIDE, use this: #include "HttpClient/HttpClient.h"
 #define TOKEN "Me72mxyaIELmctKM81Y0DVY3MTUJ4z"
-#define WEBDEFLECTION "56b671fb76254228866ee416"
-#define WEBCYCLECOUNT "56b672cb7625422dd8dbbf52"
+#define WEB_DEFLECTION_AVG "56b671fb76254228866ee416"
+#define WEB_DEFLECTION "56cc63b6762542644cc8d2ef"
+#define WEB_CYCLES "56b672cb7625422dd8dbbf52"
+#define WEB_COMPRESSOR_STATE "56cc62f37625425f3cd6aeb2"
+#define WEB_FORCE "56cc62a27625425dba666c80"
+#define WEB_FORCE_INPUT "56cc62db7625425f3cd6ae79"
+#define WEB_POSITION_RIGHT "56cc666d7625427368e80d6e"
 
 HttpClient http;
 // Headers currently need to be set at init, useful for API keys etc.
 http_header_t headers[] = {
     { "Content-Type", "application/json" },
-    { NULL, NULL } // NOTE: Always terminate headers will NULL
+    { "X-Auth-Token: Me72mxyaIELmctKM81Y0DVY3MTUJ4z" },
+    { NULL, NULL } // NOTE: Always terminate headers with NULL
 };
 
 http_request_t request;
@@ -35,11 +42,15 @@ int leftDucerPin = A2; //analog pin associated with the left transducer
 int rightDucerPin = A1; //analog pin associated with the right transducer
 
 // Define system hardware constants
-float pullArea = 2.8348; // mcm part 6498K477
-float pushArea = 3.1416; // mcm part 6498K477
+//float pullArea = 2.8348; // mcm part 6498K477
+//float pushArea = 3.1416; // mcm part 6498K477
+float pullArea = 4.6019; // mcm part 6498K488
+float pushArea = 4.9087; // mcm part 6498K488
 int minPSI = 3; // regulator min pressure
 int maxPSI = 120; // regulator max pressure
 int maxResolution = 4095;
+int maxTestLoad_Elastomer = 200; // maximum test force used in GenerateElastomerFvD
+int maxTestLoad_Bar = 120; // maximum force (per cylinder) used in GenerateFvD
     // Define I2C addresses
 int pressureSensorAddress = 40;//same as 0x28
 int dataLoggerAddress = 8; // address of dataLogger
@@ -54,8 +65,8 @@ int countsMin = 1638; //bits
 int sensorMax = 150; //psi
 int sensorMin = 0; //psi
     // Compressor limits
-int tankMin = 45; // tank pressure at which the compressor turns on
-int tankMax = 80; // tank pressure at which the compressor turns off
+int tankMin = 65; // tank pressure at which the compressor turns on
+int tankMax = 90; // tank pressure at which the compressor turns off
     // Define LCD Constants
 char ESC = 0xFE;
 
@@ -86,7 +97,7 @@ bool statusUpdate = true;
 bool useI2C = true;
 bool compressorOn = false;
 bool webUpdateFlag = false;
-int testMode = 99; // current mode (0=no test running,1=in-phase test,2=out-of-phase test)
+int testMode = 5; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing)
 int currentState = 0;  // current state (0=null,1 & 2 are mode-dependent)
 int DAC1_bits = 0; // current setting of DAC1
 int DAC2_bits = 0; // current setting of DAC2
@@ -98,7 +109,9 @@ String errorMsg = "";
 bool dataLoggerStatus = false;
 bool pressureSensorStatus = false;
 bool errorFlag = false;
+bool errorChecking = false;
 int displayMode = 0; // can be mode 0, 1 or 2
+int disp1 = 0; // display mode modifier
 int leftDucerPosBits = 0; //value used to store voltage in bits
 int rightDucerPosBits = 0; //value used to store voltage in bits
     // Calculated state values
@@ -123,6 +136,8 @@ float deflection; // Total deflection
 float deflectionAvg; // deflection running average
 float refDeflection; // Total deflection measured during most recent calibration
 float deflectionMax; // Total deflection limit
+float lastNeutralLeft; // Most recent recorded neutral position
+float lastNeutralRight; // Most recent recorded neutral position
 
 // Flags for performing functions
 bool testRelay = false;
@@ -133,6 +148,7 @@ bool calibrateOutOfPhase = false;
 bool calibratePressure = false;
 bool calibrateWindow = false;
 bool generateFvD = false; // generates force vs displacement graph
+bool elastomerFvD = false; // generates force vs displacement graph for elastomers
 
 
 void setup()
@@ -149,11 +165,11 @@ void setup()
     pinMode(rightDown, OUTPUT);
     pinMode(displayTogglePin, INPUT);
 
-    // Declare a Spark.functions so that we can access them from the cloud.
-    Spark.function("psi",WebTestPressure);
-    Spark.function("force",WebSetForce);
-    Spark.function("run",WebRunFunction);
-    Spark.function("timeout",WebSetTimeout);
+    // Declare a Particle.functions so that we can access them from the cloud.
+    Particle.function("psi",WebTestPressure);
+    Particle.function("force",WebSetForce);
+    Particle.function("run",WebRunFunction);
+    Particle.function("timeout",WebSetTimeout);
 
     // Initialize analog outputs to zero
     pinMode(DAC1, OUTPUT);
@@ -168,14 +184,19 @@ void setup()
     forceSetting = 0;
     delay(500);
 
+    BlinkD7(5,250);
+
     // Initialize neutral values
     ReadInputPins();
     compressorStartTime = millis();
     compressorStopTime = millis();
 
+    BlinkD7(5,250);
+
     //UBIDOTS CODE
     request.hostname = "things.ubidots.com";
     request.port = 80;
+
 }// Setup
 
 
@@ -240,7 +261,7 @@ void loop()
     else errorCountConsecutive = 0;
 
     // Only error out if there have been 2 consecutive errors
-    if(errorCountConsecutive > 1){
+    if(errorCountConsecutive > 1 && errorChecking){
         paused = true;
         errorFlag = true;
     }
@@ -259,6 +280,8 @@ void loop()
     if(paused){
         PauseAll();
     }
+
+    BlinkD7(2,150);
 
 }// loop
 
@@ -339,6 +362,16 @@ void SetState(int currentState){
         }
     }
 */
+    else if(testMode==5){ // elastomer test fixture (right cylinder only)
+        switch (currentState) {
+        case 1:
+            KillRelays();
+            break;
+        case 2:
+            RightDown();
+            break;
+        }
+    }
     else {
 //        KillAll();
     }
@@ -368,7 +401,6 @@ void SetMode(int testMode){
         testMode = 3;
         nStates = 2;
         break;
-
 // test mode 4 doesn't work because deflection is only calculated based on 2 states
 /*
     case 4:  // out-of-phase real world test
@@ -376,6 +408,10 @@ void SetMode(int testMode){
         nStates = 4;
         break;
 */
+    case 5: // elastomer test fixture (right cylinder only)
+        testMode = 5;
+        nStates = 2;
+        break;
     default:
         testMode = 0;
         nStates = 0;
@@ -484,7 +520,7 @@ void ReadInputPins(){
     rightDucerPosInch = rightDucerPosBits * 0.00096118; // based on 100mm ducer/4096 bits = .00096118"/bit
 
     // Read Display Switch
-    displayMode = digitalRead(displayTogglePin);
+    displayMode = digitalRead(displayTogglePin) + disp1;
 
     // update timeLeft
     timeLeft =  ( (cycleTarget-cycleCount) * (stateTimeout[currentState]+stateTimeout[currentState])/2.0 * nStates ) / 60000.0;
@@ -512,6 +548,11 @@ void RunCalibrations(){
     if(generateFvD){
         GenerateFvD();
         generateFvD = false;
+    }
+
+    if(elastomerFvD){
+        GenerateElastomerFvD();
+        elastomerFvD = false;
     }
 
     if(testRelays){
@@ -602,8 +643,8 @@ int PrintStatusToLCD(String origMsg){
             msg += "         ";
             WriteLineToLCD(msg,3);
 
-            msg = "L" + String(leftDucerPosInch,2);
-            msg += " R" + String(rightDucerPosInch,2);
+            msg = "L" + String(leftDucerPosInch,3);
+            msg += " R" + String(rightDucerPosInch,3);
             msg += "         ";WriteLineToLCD(msg,4);
 
             lastLCDupdate = millis();
@@ -634,7 +675,7 @@ int PrintStatusToLCD(String origMsg){
 
             lastLCDupdate = millis();
         }
-/*        else if(displayMode==1){
+        else if(displayMode==2){
             msg = "M" + String(testMode);
             msg += " #" + String(cycleCount) + "/" + String(cycleTarget);
             msg += " " + String(timeLeft) + "min";
@@ -661,7 +702,7 @@ int PrintStatusToLCD(String origMsg){
 
             lastLCDupdate = millis();
         }
-*/
+
     }
     return 1;
 }// PrintStatusToLCD
@@ -715,20 +756,31 @@ void UpdateDashboard(){
 
     if(millis()-lastDashboardUpdate > dashboardRefreshRate){
 
-    //    Particle.publish("Cycle Count",String(cycleCount));
-    //    Particle.publish("Deflection",String(deflection,3));
         if(dashboardUpdateCount < 25){        // send count status
+
+            request.body = "[";
+            request.body += "{\"variable\":\""WEB_CYCLES"\", \"value\": "+String(cycleCount)+" }";
+            request.body += ", { \"variable\":\""WEB_DEFLECTION"\", \"value\": "+String(deflection,3)+" }";
+            request.body += ", { \"variable\":\""WEB_DEFLECTION_AVG"\", \"value\": "+String(deflectionAvg,3)+" }";
+            request.body += ", { \"variable\":\""WEB_FORCE"\", \"value\": "+String(measuredForce)+" }";
+            request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": "+String(forceSetting)+" }";
+            request.body += ", { \"variable\":\""WEB_COMPRESSOR_STATE"\", \"value\": "+String(compressorOn)+" }";
+            request.body += "]";
+            request.path = "/api/v1.6/collections/values/";
+            http.post(request, response, headers);
+
+/*Working code
             // send deflection avg
             request.body = "{\"value\":" + String(deflectionAvg,3) + "}";
             request.path = "/api/v1.6/variables/"WEBDEFLECTION"/values?token="TOKEN;
-            http.post(request, response, headers);
+*/
 
             dashboardUpdateCount++;
         }
         else{
             // send cycleCount
             request.body = "{\"value\":" + String(cycleCount) + "}";
-            request.path = "/api/v1.6/variables/"WEBCYCLECOUNT"/values?token="TOKEN;
+            request.path = "/api/v1.6/variables/"WEB_CYCLES"/values?token="TOKEN;
             http.post(request, response, headers);
 
             dashboardUpdateCount = 0;
@@ -741,10 +793,10 @@ void UpdateDashboard(){
 
 //------------------------------------------------------------------------
 void PrintDiagnostic(String stateStr){
-    // Message Header "Time,SystemState,cycleCount,currentState,ForceSet,PSI1set,PSI2set,DAC1_bits,DAC2_bits,PSIreading(P1),leftDucerPosBits,rightDucerPosBitsleftDucerPosInch,rightDucerPosInch"
+    // Message Header "Time,SystemState,cycleCount,currentState,ForceSet,PSI1set,PSI2set,DAC1_bits,DAC2_bits,PSIreading(P1),leftDucerPosBits,rightDucerPosBitsleftDucerPosInch,rightDucerPosInch,lastNeutralLeft,lastNeutralRight"
     String msg = "";
 
-    msg += "Time " + String(Time.now()) + ",";
+    msg += String(Time.now()) + ",";
     msg += stateStr + ",";
     msg += String(cycleCount) + ",";
     msg += String(currentState) + ",";
@@ -757,7 +809,9 @@ void PrintDiagnostic(String stateStr){
     msg += String(leftDucerPosBits) + ",";
     msg += String(rightDucerPosBits) + ",";
     msg += String(leftDucerPosInch,3) + ",";
-    msg += String(rightDucerPosInch,3);
+    msg += String(rightDucerPosInch,3) + ",";
+    msg += String(lastNeutralLeft,3) + ",";
+    msg += String(lastNeutralRight,3);
 
     PrintMsg(msg);
 }// PrintDiagnostic
@@ -879,13 +933,15 @@ void CalibratePressure(){
 //------------------------------------------------------------------------
 void GenerateFvD(){
 
+    int originalForceSetting = forceSetting; // record original force setting to reset to after test
     ResetNeutral();
     ReadInputPins();
     PrintDiagnostic("Neutral");
     PrintStatusToLCD("Neutral");
 
-    for(i=0; i<=60; i+=1){
+    for(i=10; i<=maxTestLoad_Bar; i+=1){
         if(i>20) i+=1;
+        forceSetting = i;
         SetForce(i);
         PushDown();
         delay(1500);
@@ -899,7 +955,55 @@ void GenerateFvD(){
     ReadInputPins();
     PrintDiagnostic("Neutral");
     PrintMsg("FvD Test Complete.");
+
+    // reset force setting
+    forceSetting = originalForceSetting;
+    SetForce(forceSetting);
 }// GenerateFvD
+
+
+//------------------------------------------------------------------------
+void GenerateElastomerFvD(){
+
+    int originalForceSetting = forceSetting; // record original force setting to reset to after test
+    ResetNeutral();
+    ReadInputPins();
+    PrintDiagnostic("Neutral");
+    PrintStatusToLCD("Neutral");
+    int highLoadDelay = 0;
+    for(i=10; i<=maxTestLoad_Elastomer; i+=5){
+        forceSetting = i;
+        SetForce(i);
+        RightDown();
+        delay(1000+i*5);//multiplier is because bigger loads take more time
+        ReadInputPins();
+
+        PrintDiagnostic("FvD "+ String(i));
+        PrintStatusToLCD("FvD "+ String(i));
+        ResetNeutral();
+
+        if(webUpdateFlag){
+            //send update to Ubidots
+            request.body = "[";
+            request.body += "{ \"variable\":\""WEB_FORCE"\", \"value\": "+String(measuredForce)+" }";
+            request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": "+String(forceSetting)+" }";
+            request.body += ", { \"variable\":\""WEB_COMPRESSOR_STATE"\", \"value\": "+String(compressorOn)+" }";
+            request.body += ", { \"variable\":\""WEB_POSITION_RIGHT"\", \"value\": "+String(rightDucerPosInch,3)+" }";
+            request.body += "]";
+            request.path = "/api/v1.6/collections/values/";
+            http.post(request, response, headers);
+        }
+    }
+
+    delay(500);
+    ReadInputPins();
+    PrintDiagnostic("Neutral");
+    PrintMsg("Elastomer FvD Test Complete.");
+
+    // reset force setting
+    forceSetting = originalForceSetting;
+    SetForce(forceSetting);
+}// GenerateElastomerFvD
 
 
 //------------------------------------------------------------------------
@@ -1039,6 +1143,14 @@ float SetForce(float force){
     float p1 = force/pullArea;
     float p2 = force/pushArea;
 
+    // check that minimum tank pressure is higher than the desired output pressure and higher than the current pressure
+    if(tankMin < p1){
+        errorFlag = true;
+        errorMsg = "Error:Tank min pressure";
+        PauseAll();
+        return 0;
+    }
+
     int retVal = 0;
     retVal += SetPressure(p1,1);
     retVal += SetPressure(p2,2);
@@ -1063,18 +1175,21 @@ int CheckI2C(int address){
 void ResetNeutral(){
     SetForce(25);
     delay(250);
-    PushDown();
-    delay(200);
-    PushUp();
-    delay(500);
-    if(testMode==1){ //when in mode 1, want "neutral" to be a lower reference point than fully topped out.
+    if(testMode!=1 && testMode!=5){
         PushDown();
         delay(200);
+    }
+    PushUp();
+    delay(500);
+    if(testMode==1 || testMode==5){ //when in mode 1 or 5, want "neutral" to be a lower reference point than fully topped out.
+        PushDown();
+        delay(300);
     }
     KillAll();
     delay(500);
     ReadInputPins();
-
+    lastNeutralLeft = leftDucerPosInch;
+    lastNeutralRight = rightDucerPosInch;
     // return to original force setting
     SetForce(forceSetting);
 }// ResetNeutral
@@ -1181,6 +1296,7 @@ void PauseAll(){
         ReadInputPins();
         PrintStatusToLCD("Paused");
         UpdateDashboard();
+        RunCalibrations();// runs functions enabled through webhooks
         delay(200);
     }
 
@@ -1203,18 +1319,22 @@ int WebRunFunction(String command) {
     if(command=="leftUp") {
         testRelayPin = leftUp;
         testRelay = true;
+        return 1;
     }
     else if(command=="leftDown") {
         testRelayPin = leftDown;
         testRelay = true;
+        return 1;
     }
     else if(command=="rightUp") {
         testRelayPin = rightUp;
         testRelay = true;
+        return 1;
     }
     else if(command=="rightDown") {
         testRelayPin = rightDown;
         testRelay = true;
+        return 1;
     }
     else if(command=="calibrateUpDown") {
         calibrateInPhase = true;
@@ -1237,9 +1357,19 @@ int WebRunFunction(String command) {
         calibrateWindow = true;
         return 1;
     }
-    else if(command=="generateFvD"){
+    else if(command.substring(0,11)=="generateFvD"){
+        command = command.substring(11);
+        int tempLoad = command.toInt();
+        if(tempLoad==tempLoad) maxTestLoad_Bar = tempLoad; // check if NaN
         generateFvD = true;
-        return 1;
+        return maxTestLoad_Bar;
+    }
+    else if(command.substring(0,12)=="elastomerFvD"){
+        command = command.substring(12);
+        int tempLoad = command.toInt();
+        if(tempLoad==tempLoad) maxTestLoad_Elastomer = tempLoad; // check if NaN
+        elastomerFvD = true;
+        return maxTestLoad_Elastomer;
     }
     else if(command=="diagnostic") {
         PrintDiagnostic("");
@@ -1253,6 +1383,11 @@ int WebRunFunction(String command) {
     else if(command=="I2C"){
         if(useI2C) useI2C = false;
         else useI2C = true;
+        return 1;
+    }
+    else if(command=="errorChecking"){
+        if(errorChecking) errorChecking = false;
+        else errorChecking = true;
         return 1;
     }
     else if(command=="web"){
@@ -1304,6 +1439,11 @@ int WebRunFunction(String command) {
         errorMsg = "";
         return 1;
     }
+    else if(command=="disp"){
+        if(disp1) disp1 = 0;
+        else disp1 = 1;
+        return 1;
+    }
     else if(command=="status"){
         return cycleCount;
     }
@@ -1351,3 +1491,20 @@ int WebSetTimeout(String tStr){
         return stateTimeout[0];
     }
 }// WebSetTimeout
+
+
+
+//------------------------------------------------------------------------
+void BlinkD7(int blinks, int duration){
+    pinMode(D7,OUTPUT);
+    int i;
+
+    for(i=0;i<blinks;i++){
+        digitalWrite(D7,HIGH);
+        delay(duration);
+        digitalWrite(D7,LOW);
+        delay(duration);
+    }
+
+    return;
+}

@@ -1,0 +1,11 @@
+request.body = "{\"value\":" + String(cycleCount) + "}";
+request.path = "/api/v1.6/variables/"WEBCYCLECOUNT"/values?token="TOKEN;
+
+
+Single variable
+
+curl -i --header "Accept: application/json; indent=4" --header "Content-Type: application/json" --header "X-Auth-Token: Me72mxyaIELmctKM81Y0DVY3MTUJ4z" -X POST -d '"value":999"' "/api/v1.6/variables/56b672cb7625422dd8dbbf52/values?token=Me72mxyaIELmctKM81Y0DVY3MTUJ4z;
+
+Multiple variables
+
+curl -i --header "Accept: application/json; indent=4" --header "Content-Type: application/json" --header "X-Auth-Token: Me72mxyaIELmctKM81Y0DVY3MTUJ4z" -X POST -d '[{"variable": "56b672cb7625422dd8dbbf52", "value":2}, {"variable": "56b671fb76254228866ee416", "value":0.52}]' http://things.ubidots.com/api/v1.6/collections/values
