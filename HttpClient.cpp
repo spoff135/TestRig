@@ -1,6 +1,6 @@
 #include "HttpClient.h"
 
-static const uint16_t TIMEOUT = 5000; // Allow maximum 5s between data packets.
+static const uint16_t TIMEOUT = 10; // Allow maximum 5s between data packets. //TBD SDP Edit to attempt to improve delays
 
 /**
 * Constructor.
@@ -160,6 +160,9 @@ void HttpClient::request(http_request_t &aRequest, http_response_t &aResponse, h
     // clear response buffer
     memset(&buffer[0], 0, sizeof(buffer));
 
+//TBD SDP Edit to attempt to improve delays
+    client.stop();
+/* //TBD SDP Edit to attempt to improve delays
 
     //
     // Receive HTTP Response
@@ -268,4 +271,6 @@ void HttpClient::request(http_request_t &aRequest, http_response_t &aResponse, h
     aResponse.body = "";
     aResponse.body += raw_response.substring(bodyPos+4);
     aResponse.status = atoi(statusCode.c_str());
+
+*/ //TBD SDP Edit to attempt to improve delays
 }
