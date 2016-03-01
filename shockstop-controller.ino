@@ -352,6 +352,7 @@ void SetState(int currentState){
             break;
         case 2:
             RightDown();
+            cycleCount++;
             break;
         }
     }
