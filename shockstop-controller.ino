@@ -95,7 +95,7 @@ bool paused = true;
 bool statusUpdate = true;
 bool useI2C = true;
 bool compressorOn = false;
-bool webUpdateFlag = false;
+bool webUpdateFlag = true;
 int testMode = 5; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing)
 int currentState = 0;  // current state (0=null,1 & 2 are mode-dependent)
 int DAC1_bits = 0; // current setting of DAC1
@@ -121,9 +121,6 @@ float leftDucerPosInch = 0; // value used to store position in inches from zero 
 float rightDucerPosInch = 0; // value used to store position in inches from zero position
 float compressorDutyCycle = 0.5;
     // Measured/calculated values related to position
-//delete float deflection[5] = {0,0,0,0,0}; // most recent measured deflection of state i
-//delete float deflectionMax[5] = {0,0,0,0,0}; // max measured deflection of state i since last reset
-//delete float deflectionWindow[5] = {1,1,1,1,1}; // max allowed deflection of state i
 int stateTimeout[3] = {2000,2000,2000}; //time (ms) before automatic state change
 float positionLeft[3] = {0,0,0}; // position at end of state [i]
 float positionRight[3] = {0,0,0};
@@ -260,13 +257,6 @@ void loop()
         paused = true;
         errorFlag = true;
     }
-
-//delete    totalDeflection = deflection[1]+deflection[2];
-//delete    if(totalDeflection > totalDeflectionLimit){
-//delete        paused = true;
-//delete        errorFlag = true;
-//delete        errorMsg = "Defl error";
-//delete    }
 
     PrintStatusToLCD("Run");
 
@@ -642,7 +632,7 @@ int PrintStatusToLCD(String origMsg){
 
             lastLCDupdate = millis();
         }
-        else if(displayMode==1){
+        else if(displayMode==2){
             msg = "M" + String(testMode);
             msg += "/" + String(refDeflection,3);
             msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
@@ -668,7 +658,7 @@ int PrintStatusToLCD(String origMsg){
 
             lastLCDupdate = millis();
         }
-        else if(displayMode==2){
+        else if(displayMode==1){
             msg = "M" + String(testMode);
             msg += " #" + String(cycleCount) + "/" + String(cycleTarget);
             msg += " " + String(timeLeft) + "min";
@@ -729,37 +719,38 @@ void UpdateDashboard(){
 
     if(millis()-lastDashboardUpdate > dashboardRefreshRate){
 
-        if(dashboardUpdateCount < 25){        // send count status
+      request.body = "[";
+      request.body += "{\"variable\":\""WEB_CYCLES"\", \"value\": "+String(cycleCount)+" }";
+      request.body += ", { \"variable\":\""WEB_DEFLECTION"\", \"value\": "+String(deflection,3)+" }";
+      request.body += ", { \"variable\":\""WEB_DEFLECTION_AVG"\", \"value\": "+String(deflectionAvg,3)+" }";
+      request.body += ", { \"variable\":\""WEB_FORCE"\", \"value\": "+String(measuredForce,1)+" }";
+      request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": "+String(forceSetting)+" }";
+      request.body += ", { \"variable\":\""WEB_COMPRESSOR_STATE"\", \"value\": "+String(compressorOn)+" }";
+      request.body += "]";
+      request.path = "/api/v1.6/collections/values/";
+      http.post(request, response, headers);
 
-            request.body = "[";
-            request.body += "{\"variable\":\""WEB_CYCLES"\", \"value\": "+String(cycleCount)+" }";
-            request.body += ", { \"variable\":\""WEB_DEFLECTION"\", \"value\": "+String(deflection,3)+" }";
-            request.body += ", { \"variable\":\""WEB_DEFLECTION_AVG"\", \"value\": "+String(deflectionAvg,3)+" }";
-            request.body += ", { \"variable\":\""WEB_FORCE"\", \"value\": "+String(measuredForce)+" }";
-            request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": "+String(forceSetting)+" }";
-            request.body += ", { \"variable\":\""WEB_COMPRESSOR_STATE"\", \"value\": "+String(compressorOn)+" }";
-            request.body += "]";
-            request.path = "/api/v1.6/collections/values/";
-            http.post(request, response, headers);
-
-/*Working code
-            // send deflection avg
-            request.body = "{\"value\":" + String(deflectionAvg,3) + "}";
-            request.path = "/api/v1.6/variables/"WEBDEFLECTION"/values?token="UBIDOTS_TOKEN;
+/*
+      request.body = "[";
+      request.body += "{\"variable\":\""WEB_CYCLES"\", \"value\": 2}";
+      request.body += ", { \"variable\":\""WEB_DEFLECTION"\", \"value\": 2}";
+      request.body += ", { \"variable\":\""WEB_DEFLECTION_AVG"\", \"value\": 2}";
+      request.body += ", { \"variable\":\""WEB_FORCE"\", \"value\": 2}";
+      request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": 2}";
+      request.body += ", { \"variable\":\""WEB_COMPRESSOR_STATE"\", \"value\": 2}";
+      request.body += "]";
+      request.path = "/api/v1.6/collections/values/";
+      http.post(request, response, headers);
 */
 
-            dashboardUpdateCount++;
-        }
-        else{
-            // send cycleCount
-            request.body = "{\"value\":" + String(cycleCount) + "}";
-            request.path = "/api/v1.6/variables/"WEB_CYCLES"/values?token="UBIDOTS_TOKEN;
-            http.post(request, response, headers);
+/*Working code
+      // send deflection avg
+      request.body = "{\"value\":" + String(deflectionAvg,3) + "}";
+      request.path = "/api/v1.6/variables/"WEBDEFLECTION"/values?token="UBIDOTS_TOKEN;
+*/
 
-            dashboardUpdateCount = 0;
-        }
 
-        lastDashboardUpdate = millis();
+      lastDashboardUpdate = millis();
     }
 }// UpdateDashboard
 
@@ -968,6 +959,11 @@ void GenerateElastomerFvD(){
           delay(1000+i*5);//multiplier is because bigger loads take more time
           ReadInputPins();
 
+          // record these values now (fixes bug related to ubidots output being overwritten by a later call to ReadInputPins)
+          float tempMF = measuredForce;
+          float tempFS = forceSetting;
+          float tempPR = rightDucerPosInch;
+
           PrintDiagnostic("FvD "+ String(i));
           PrintStatusToLCD("FvD "+ String(i));
           ResetNeutral();
@@ -975,14 +971,15 @@ void GenerateElastomerFvD(){
           if(webUpdateFlag){
               //send update to Ubidots
               request.body = "[";
-              request.body += "{ \"variable\":\""WEB_FORCE"\", \"value\": "+String(measuredForce)+" }";
-              request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": "+String(forceSetting)+" }";
+              request.body += "{ \"variable\":\""WEB_FORCE"\", \"value\": "+String(tempMF,3)+" }";
+              request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": "+String(tempFS)+" }";
               request.body += ", { \"variable\":\""WEB_COMPRESSOR_STATE"\", \"value\": "+String(compressorOn)+" }";
-              request.body += ", { \"variable\":\""WEB_POSITION_RIGHT"\", \"value\": "+String(rightDucerPosInch,3)+" }";
+              request.body += ", { \"variable\":\""WEB_POSITION_RIGHT"\", \"value\": "+String(tempPR,3)+" }";
               request.body += "]";
               request.path = "/api/v1.6/collections/values/";
               http.post(request, response, headers);
           }
+
       }
     }
     delay(500);
@@ -1277,7 +1274,7 @@ void PauseAll(){
     while(errorFlag){
         ReadInputPins();
         PrintStatusToLCD(errorMsg);
-        UpdateDashboard();
+        if(webUpdateFlag) UpdateDashboard();
         delay(200);
     }
 
@@ -1285,7 +1282,7 @@ void PauseAll(){
     while(paused){
         ReadInputPins();
         PrintStatusToLCD("Paused");
-        UpdateDashboard();
+        if(webUpdateFlag) UpdateDashboard();
         RunCalibrations();// runs functions enabled through webhooks
         delay(200);
     }
@@ -1502,4 +1499,10 @@ void BlinkD7(int blinks, int duration){
     }
 
     return;
+}
+
+
+void DeleteUbiData(){
+
+
 }
