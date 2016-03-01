@@ -1,6 +1,5 @@
 //UBIDOTS CODE
-#include "HttpClient.h"
-// if using webIDE, use this: #include "HttpClient/HttpClient.h"
+#include "HttpClient.h"  // if using webIDE, use this: #include "HttpClient/HttpClient.h"
 #define UBIDOTS_TOKEN "Me72mxyaIELmctKM81Y0DVY3MTUJ4z"
 #define WEB_DEFLECTION_AVG "56b671fb76254228866ee416"
 #define WEB_DEFLECTION "56cc63b6762542644cc8d2ef"
@@ -149,7 +148,7 @@ bool calibratePressure = false;
 bool calibrateWindow = false;
 bool generateFvD = false; // generates force vs displacement graph
 bool elastomerFvD = false; // generates force vs displacement graph for elastomers
-
+bool iterateFvD = false; // flag for iterative FvD graph
 
 void setup()
 {
@@ -725,26 +724,6 @@ int PrintMsg(String msg){
     return 1;
 }// PrintMsg
 
-
-/*
-//------------------------------------------------------------------------
-void UpdateWeb(){
-    if(millis()-lastDashboardUpdate > dashboardRefreshRate){
-        if(webUpdateCount > 0){// Send cycleCount
-            PrintMsg("*1" + String(cycleCount));
-            webUpdateCount -= 1;
-        }
-        else{// Send deflection
-            PrintMsg("*2" + String(deflection,2));
-            webUpdateCount += 1;
-        }
-
-        lastDashboardUpdate = millis();
-    }
-
-}// UpdateWeb
-*/
-
 //------------------------------------------------------------------------
 void UpdateDashboard(){
 
@@ -974,32 +953,38 @@ void GenerateElastomerFvD(){
     PrintDiagnostic("Neutral");
     PrintStatusToLCD("Neutral");
 
-    // Record position every 5 lbs
-    int highLoadDelay = 0;
-    for(i=10; i<=maxTestLoad_Elastomer; i+=5){
-        forceSetting = i;
-        SetForce(i);
-        RightDown();
-        delay(1000+i*5);//multiplier is because bigger loads take more time
-        ReadInputPins();
+    int maxStart;
+    int maxLoad;
+    if(iterateFvD) maxStart = 10;
+    else maxStart = maxTestLoad_Elastomer;
 
-        PrintDiagnostic("FvD "+ String(i));
-        PrintStatusToLCD("FvD "+ String(i));
-        ResetNeutral();
+    for(maxLoad = maxStart; maxLoad <= maxTestLoad_Elastomer; maxLoad+=10){
+      // Record position every 5 lbs
+      int highLoadDelay = 0;
+      for(i=10; i<=maxLoad; i+=5){
+          forceSetting = i;
+          SetForce(i);
+          RightDown();
+          delay(1000+i*5);//multiplier is because bigger loads take more time
+          ReadInputPins();
 
-        if(webUpdateFlag){
-            //send update to Ubidots
-            request.body = "[";
-            request.body += "{ \"variable\":\""WEB_FORCE"\", \"value\": "+String(measuredForce)+" }";
-            request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": "+String(forceSetting)+" }";
-            request.body += ", { \"variable\":\""WEB_COMPRESSOR_STATE"\", \"value\": "+String(compressorOn)+" }";
-            request.body += ", { \"variable\":\""WEB_POSITION_RIGHT"\", \"value\": "+String(rightDucerPosInch,3)+" }";
-            request.body += "]";
-            request.path = "/api/v1.6/collections/values/";
-            http.post(request, response, headers);
-        }
+          PrintDiagnostic("FvD "+ String(i));
+          PrintStatusToLCD("FvD "+ String(i));
+          ResetNeutral();
+
+          if(webUpdateFlag){
+              //send update to Ubidots
+              request.body = "[";
+              request.body += "{ \"variable\":\""WEB_FORCE"\", \"value\": "+String(measuredForce)+" }";
+              request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": "+String(forceSetting)+" }";
+              request.body += ", { \"variable\":\""WEB_COMPRESSOR_STATE"\", \"value\": "+String(compressorOn)+" }";
+              request.body += ", { \"variable\":\""WEB_POSITION_RIGHT"\", \"value\": "+String(rightDucerPosInch,3)+" }";
+              request.body += "]";
+              request.path = "/api/v1.6/collections/values/";
+              http.post(request, response, headers);
+          }
+      }
     }
-
     delay(500);
     ReadInputPins();
     PrintDiagnostic("Neutral");
@@ -1371,6 +1356,12 @@ int WebRunFunction(String command) {
     }
     else if(command.substring(0,12)=="elastomerFvD"){
         command = command.substring(12);
+        if(command.substring(0,1)=="*") {
+          command = command.substring(1);
+          iterateFvD = true;
+        }
+        else iterateFvD = false;
+
         int tempLoad = command.toInt();
         if(tempLoad==tempLoad) maxTestLoad_Elastomer = tempLoad; // check if NaN
         elastomerFvD = true;
