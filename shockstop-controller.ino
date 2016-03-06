@@ -1,6 +1,5 @@
 //UBIDOTS CODE
 #include "HttpClient.h"  // if using webIDE, use this: #include "HttpClient/HttpClient.h"
-#define UBIDOTS_TOKEN "Me72mxyaIELmctKM81Y0DVY3MTUJ4z"
 #define WEB_DEFLECTION_AVG "56b671fb76254228866ee416"
 #define WEB_DEFLECTION "56cc63b6762542644cc8d2ef"
 #define WEB_CYCLES "56b672cb7625422dd8dbbf52"
