@@ -931,7 +931,7 @@ void GenerateElastomerFvD(){
 
     int originalForceSetting = forceSetting; // record original force setting to reset to after test
     // Record max up position
-    SetForce(20);
+    SetForce(10);
     PushUp();
     delay(1000);
     ReadInputPins();
@@ -946,13 +946,13 @@ void GenerateElastomerFvD(){
 
     int maxStart;
     int maxLoad;
-    if(iterateFvD) maxStart = 10;
+    if(iterateFvD) maxStart = 0;
     else maxStart = maxTestLoad_Elastomer;
 
     for(maxLoad = maxStart; maxLoad <= maxTestLoad_Elastomer; maxLoad+=10){
       // Record position every 5 lbs
       int highLoadDelay = 0;
-      for(i=10; i<=maxLoad; i+=5){
+      for(i=0; i<=maxLoad; i+=5){
           forceSetting = i;
           SetForce(i);
           RightDown();
