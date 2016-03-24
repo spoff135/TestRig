@@ -40,10 +40,10 @@ int leftDucerPin = A2; //analog pin associated with the left transducer
 int rightDucerPin = A1; //analog pin associated with the right transducer
 
 // Define system hardware constants
-//float pullArea = 2.8348; // mcm part 6498K477
-//float pushArea = 3.1416; // mcm part 6498K477
-float pullArea = 4.6019; // mcm part 6498K488
-float pushArea = 4.9087; // mcm part 6498K488
+float pullArea = 2.8348; // mcm part 6498K477
+float pushArea = 3.1416; // mcm part 6498K477
+//float pullArea = 4.6019; // mcm part 6498K488
+//float pushArea = 4.9087; // mcm part 6498K488
 int minPSI = 3; // regulator min pressure
 int maxPSI = 120; // regulator max pressure
 int maxResolution = 4095;
@@ -757,7 +757,7 @@ void UpdateDashboard(){
 
 //------------------------------------------------------------------------
 void PrintDiagnostic(String stateStr){
-    // Message Header "Time,SystemState,cycleCount,currentState,ForceSet,PSI1set,PSI2set,DAC1_bits,DAC2_bits,PSIreading(P1),leftDucerPosBits,rightDucerPosBitsleftDucerPosInch,rightDucerPosInch,lastNeutralLeft,lastNeutralRight"
+    // Message Header "Time,SystemState,cycleCount,currentState,ForceSet,PSI1set,PSI2set,DAC1_bits,DAC2_bits,PSIreading(P1),leftDucerPosBits,rightDucerPosBits,leftDucerPosInch,rightDucerPosInch,lastNeutralLeft,lastNeutralRight"
     String msg = "";
 
     msg += String(Time.now()) + ",";
@@ -931,7 +931,7 @@ void GenerateElastomerFvD(){
 
     int originalForceSetting = forceSetting; // record original force setting to reset to after test
     // Record max up position
-    SetForce(10);
+    SetForce(5);
     PushUp();
     delay(1000);
     ReadInputPins();
@@ -939,7 +939,8 @@ void GenerateElastomerFvD(){
     PrintStatusToLCD("Up");
 
     // Record "neutral" position
-    ResetNeutral();
+    SetForce(0);
+    PushDown();
     ReadInputPins();
     PrintDiagnostic("Neutral");
     PrintStatusToLCD("Neutral");
@@ -952,12 +953,15 @@ void GenerateElastomerFvD(){
     for(maxLoad = maxStart; maxLoad <= maxTestLoad_Elastomer; maxLoad+=10){
       // Record position every 5 lbs
       int highLoadDelay = 0;
-      for(i=0; i<=maxLoad; i+=5){
+      for(i=0; i<=maxLoad; i+=2){
+          if(i>16) i+=3; // after 16 lbs, increment by a total of 5
           forceSetting = i;
           SetForce(i);
           RightDown();
           delay(1000+i*5);//multiplier is because bigger loads take more time
           ReadInputPins();
+          KillAll();
+          delay(500);
 
           // record these values now (fixes bug related to ubidots output being overwritten by a later call to ReadInputPins)
           float tempMF = measuredForce;
@@ -966,7 +970,13 @@ void GenerateElastomerFvD(){
 
           PrintDiagnostic("FvD "+ String(i));
           PrintStatusToLCD("FvD "+ String(i));
-          ResetNeutral();
+
+          // reset position by pushing up
+          SetForce(5);
+          PushUp();
+          delay(1000+i*5);
+          KillAll();
+          delay(500);
 
           if(webUpdateFlag){
               //send update to Ubidots
@@ -990,6 +1000,8 @@ void GenerateElastomerFvD(){
     // reset force setting
     forceSetting = originalForceSetting;
     SetForce(forceSetting);
+    KillAll();
+
 }// GenerateElastomerFvD
 
 
@@ -1371,22 +1383,22 @@ int WebRunFunction(String command) {
     else if(command=="pause"){
         if(paused) paused = false;
         else paused = true;
-        return 1;
+        return paused;
     }
     else if(command=="I2C"){
         if(useI2C) useI2C = false;
         else useI2C = true;
-        return 1;
+        return useI2C;
     }
     else if(command=="errorChecking"){
         if(errorChecking) errorChecking = false;
         else errorChecking = true;
-        return 1;
+        return errorChecking;
     }
     else if(command=="web"){
         if(webUpdateFlag) webUpdateFlag = false;
         else webUpdateFlag = true;
-        return 1;
+        return webUpdateFlag;
     }
     else if(command.substring(0,7)=="webRate"){
         command = command.substring(7);
