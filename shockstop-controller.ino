@@ -1,3 +1,12 @@
+int version = 5171; // version number (month.day.rev)
+int testMode = 5; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing)
+int cycleCount = 0;
+int cycleTarget = 100000;
+int stateTimeout[3] = {2000,2000,2000}; // time (ms) before automatic state change
+float windowExcursionLimit = 1.1;
+bool webUpdateFlag = true;
+int testNumber = 1; // automatically incremented with each test
+
 //UBIDOTS CODE
 #include "HttpClient.h"  // if using webIDE, use this: #include "HttpClient/HttpClient.h"
 #define WEB_DEFLECTION_AVG "56b671fb76254228866ee416"
@@ -22,7 +31,6 @@ http_response_t response;
 
 int LCDrefreshRate = 300; //LCD refresh rate (ms)
 int dashboardRefreshRate = 20000; // dashboard refresh rate (ms)
-float windowExcursionLimit = 1.1;
 
 // Define digital pins
 int leftUp = D2; // relay 1
@@ -73,8 +81,6 @@ char ESC = 0xFE;
 int nStates = 0; // number of states in the testMode
 int i = 0;
 int dashboardUpdateCount = 0;
-int cycleCount = 0;
-int cycleTarget = 100000;
 int errorCountConsecutive = 0; // count of consecutive errors
 int errorLog = 0; // total count of all errors (including non-consecutive)
 int webUpdateCount = 0;
@@ -94,8 +100,6 @@ bool paused = true;
 bool statusUpdate = true;
 bool useI2C = true;
 bool compressorOn = false;
-bool webUpdateFlag = true;
-int testMode = 5; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing)
 int currentState = 0;  // current state (0=null,1 & 2 are mode-dependent)
 int DAC1_bits = 0; // current setting of DAC1
 int DAC2_bits = 0; // current setting of DAC2
@@ -120,7 +124,6 @@ float leftDucerPosInch = 0; // value used to store position in inches from zero 
 float rightDucerPosInch = 0; // value used to store position in inches from zero position
 float compressorDutyCycle = 0.5;
     // Measured/calculated values related to position
-int stateTimeout[3] = {2000,2000,2000}; //time (ms) before automatic state change
 float positionLeft[3] = {0,0,0}; // position at end of state [i]
 float positionRight[3] = {0,0,0};
 float refPositionLeft[3] = {0,0,0}; // reference position from calibration of state [i]
@@ -145,6 +148,7 @@ bool calibrateWindow = false;
 bool generateFvD = false; // generates force vs displacement graph
 bool elastomerFvD = false; // generates force vs displacement graph for elastomers
 bool iterateFvD = false; // flag for iterative FvD graph
+bool continuousFvD = false; // flag for continuous force vs displacement graph for elastomers
 
 void setup()
 {
@@ -538,6 +542,11 @@ void RunCalibrations(){
         elastomerFvD = false;
     }
 
+    if(continuousFvD){
+        GenerateContinuousFvD();
+        continuousFvD = false;
+    }
+
     if(testRelays){
         TestRelays();
         testRelays = false;
@@ -608,31 +617,34 @@ int PrintStatusToLCD(String origMsg){
         if(displayMode==0){
             ClearLCD();
 
-            msg = "M" + String(testMode);
-            msg += " #" + String(cycleCount) + "/" + String(cycleTarget);
-            msg += " " + String(timeLeft) + "min";
-            msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
+            msg = "Ver:" + String(version) + " T"+ String(testNumber) + " M" + String(testMode);
+            msg += "                "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
             WriteLineToLCD(msg,1);
 
-            if(useI2C) msg = origMsg + " | D:" + String(dataLoggerStatus) + " S:" + String(currentState);
+            msg = "#" + String(cycleCount) + "/" + String(cycleTarget);
+            msg += " " + String(timeLeft) + "min";
+            msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
+            WriteLineToLCD(msg,2);
+
+            if(useI2C) msg = origMsg + " | D:" + String(dataLoggerStatus) + " S:" + String(currentState) + " T:" + String(testNumber);
             else msg = origMsg + " | I2C Off";
             msg += "         ";
-            WriteLineToLCD(msg,2);
+            WriteLineToLCD(msg,3);
 
             msg = "Tank:" + String(tankMin);
             msg += "<" + String(tankPressurePSI,1);
             msg += "<" + String(tankMax);
             msg += "|" + String(compressorDutyCycle,1);
             msg += "         ";
-            WriteLineToLCD(msg,3);
+            WriteLineToLCD(msg,4);
 
-            msg = "L" + String(leftDucerPosInch,3);
-            msg += " R" + String(rightDucerPosInch,3);
-            msg += "         ";WriteLineToLCD(msg,4);
+//            msg = "L" + String(leftDucerPosInch,3);
+//            msg += " R" + String(rightDucerPosInch,3);
+//            msg += "         ";WriteLineToLCD(msg,4);
 
             lastLCDupdate = millis();
         }
-        else if(displayMode==2){
+        else if(displayMode==1){
             msg = "M" + String(testMode);
             msg += "/" + String(refDeflection,3);
             msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
@@ -658,7 +670,7 @@ int PrintStatusToLCD(String origMsg){
 
             lastLCDupdate = millis();
         }
-        else if(displayMode==1){
+        else if(displayMode==2){
             msg = "M" + String(testMode);
             msg += " #" + String(cycleCount) + "/" + String(cycleTarget);
             msg += " " + String(timeLeft) + "min";
@@ -726,6 +738,7 @@ void UpdateDashboard(){
       request.body += ", { \"variable\":\""WEB_FORCE"\", \"value\": "+String(measuredForce,1)+" }";
       request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": "+String(forceSetting)+" }";
       request.body += ", { \"variable\":\""WEB_COMPRESSOR_STATE"\", \"value\": "+String(compressorOn)+" }";
+      request.body += ", { \"variable\":\""WEB_POSITION_RIGHT"\", \"value\": "+String(positionRight[1])+" }";
       request.body += "]";
       request.path = "/api/v1.6/collections/values/";
       http.post(request, response, headers);
@@ -748,8 +761,6 @@ void UpdateDashboard(){
       request.body = "{\"value\":" + String(deflectionAvg,3) + "}";
       request.path = "/api/v1.6/variables/"WEBDEFLECTION"/values?token="UBIDOTS_TOKEN;
 */
-
-
       lastDashboardUpdate = millis();
     }
 }// UpdateDashboard
@@ -757,13 +768,13 @@ void UpdateDashboard(){
 
 //------------------------------------------------------------------------
 void PrintDiagnostic(String stateStr){
-    // Message Header "Time,SystemState,cycleCount,currentState,ForceSet,PSI1set,PSI2set,DAC1_bits,DAC2_bits,PSIreading(P1),leftDucerPosBits,rightDucerPosBits,leftDucerPosInch,rightDucerPosInch,lastNeutralLeft,lastNeutralRight"
+    // Message Header "Time,SystemState,cycleCount,testNumber,ForceSet,PSI1set,PSI2set,DAC1_bits,DAC2_bits,PSIreading(P1),leftDucerPosBits,rightDucerPosBits,leftDucerPosInch,rightDucerPosInch,lastNeutralLeft,lastNeutralRight"
     String msg = "";
 
     msg += String(Time.now()) + ",";
     msg += stateStr + ",";
     msg += String(cycleCount) + ",";
-    msg += String(currentState) + ",";
+    msg += String(testNumber) + ",";
     msg += String(forceSetting,2) + ",";
     msg += String(PSI1setting,2) + ",";
     msg += String(PSI2setting,2) + ",";
@@ -923,15 +934,83 @@ void GenerateFvD(){
     // reset force setting
     forceSetting = originalForceSetting;
     SetForce(forceSetting);
+
+    // increment test number
+    testNumber++;
 }// GenerateFvD
 
+void GenerateContinuousFvD(){
+  int originalForceSetting = forceSetting; // record original force setting to reset to after test
+
+  SetForce(5);
+  delay(250);
+  for(i=0; i<3; i++){ // cycle max load down 3 times to "set" elastomer
+    SetForce(maxTestLoad_Elastomer);
+    RightDown();
+    delay(1000);
+    SetForce(5);
+    RightUp();
+    delay(2000);
+  }
+  delay(10000); // delay 10s to allow elastomer to recover
+
+  // Record max up position
+  SetForce(5);
+  delay(250);
+  RightUp();
+  delay(1000);
+  ReadInputPins();
+  PrintDiagnostic("Up");
+  PrintStatusToLCD("Up");
+
+  // Record "neutral" position
+  SetForce(0);
+  RightDown();
+  ReadInputPins();
+  PrintDiagnostic("Neutral");
+  PrintStatusToLCD("Neutral");
+  delay(1000);
+
+  int i = 0;
+  RightDown();
+  for(i=0; i<maxTestLoad_Elastomer; i++){
+    forceSetting = i;
+    SetForce(i);
+    delay(500);//multiplier is because bigger loads take more time
+    ReadInputPins();
+
+    PrintDiagnostic("FvD "+ String(i));
+    PrintStatusToLCD("FvD "+ String(i));
+  }
+
+  // reset position by pushing up
+  SetForce(5);
+  PushUp();
+  delay(1000);
+  KillAll();
+
+}
 
 //------------------------------------------------------------------------
 void GenerateElastomerFvD(){
 
     int originalForceSetting = forceSetting; // record original force setting to reset to after test
+
+    SetForce(5);
+    delay(250);
+    for(i=0; i<3; i++){ // cycle max load down 3 times to "set" elastomer
+      SetForce(maxTestLoad_Elastomer);
+      RightDown();
+      delay(1000);
+      SetForce(5);
+      RightUp();
+      delay(2000);
+    }
+    delay(10000); // delay 10s to allow elastomer to recover
+
     // Record max up position
     SetForce(5);
+    delay(250);
     PushUp();
     delay(1000);
     ReadInputPins();
@@ -950,9 +1029,9 @@ void GenerateElastomerFvD(){
     if(iterateFvD) maxStart = 0;
     else maxStart = maxTestLoad_Elastomer;
 
+    // outer loop allows for iterativeFvD
     for(maxLoad = maxStart; maxLoad <= maxTestLoad_Elastomer; maxLoad+=10){
-      // Record position every 5 lbs
-      int highLoadDelay = 0;
+      // inner loop records force vs displacement from 0 to maxLoad
       for(i=0; i<=maxLoad; i+=2){
           if(i>16) i+=3; // after 16 lbs, increment by a total of 5
           forceSetting = i;
@@ -1002,6 +1081,8 @@ void GenerateElastomerFvD(){
     SetForce(forceSetting);
     KillAll();
 
+    // increment test number
+    testNumber++;
 }// GenerateElastomerFvD
 
 
@@ -1373,7 +1454,16 @@ int WebRunFunction(String command) {
 
         int tempLoad = command.toInt();
         if(tempLoad==tempLoad) maxTestLoad_Elastomer = tempLoad; // check if NaN
+        else return -1;
         elastomerFvD = true;
+        return maxTestLoad_Elastomer;
+    }
+    else if(command.substring(0,13)=="continuousFvD"){
+        command = command.substring(13);
+        int tempLoad = command.toInt();
+        if(tempLoad==tempLoad) maxTestLoad_Elastomer = tempLoad; // check if NaN
+        else return -1;
+        continuousFvD = true;
         return maxTestLoad_Elastomer;
     }
     else if(command=="diagnostic") {
@@ -1439,6 +1529,11 @@ int WebRunFunction(String command) {
         tankMin = command.toInt();
         return tankMin;
     }
+    else if(command.substring(0,4)=="test"){
+        command = command.substring(4);
+        testNumber = command.toInt();
+        return testNumber;
+    }
     else if(command=="resetError"){
         errorFlag = false;
         errorMsg = "";
@@ -1450,7 +1545,10 @@ int WebRunFunction(String command) {
         return 1;
     }
     else if(command=="status"){
-        return cycleCount;
+      return cycleCount;
+    }
+    else if(command=="version"){
+      return version;
     }
     else{
         TestMsg(command);
@@ -1496,25 +1594,3 @@ int WebSetTimeout(String tStr){
         return stateTimeout[0];
     }
 }// WebSetTimeout
-
-
-//------------------------------------------------------------------------
-void BlinkD7(int blinks, int duration){
-    pinMode(D7,OUTPUT);
-    int i;
-
-    for(i=0;i<blinks;i++){
-        digitalWrite(D7,HIGH);
-        delay(duration);
-        digitalWrite(D7,LOW);
-        delay(duration);
-    }
-
-    return;
-}
-
-
-void DeleteUbiData(){
-
-
-}
