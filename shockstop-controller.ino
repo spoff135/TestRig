@@ -1,4 +1,4 @@
-int version = 5171; // version number (month.day.rev)
+int version = 5174; // version number (month.day.rev)
 int testMode = 5; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing)
 int cycleCount = 0;
 int cycleTarget = 100000;
@@ -976,11 +976,11 @@ void GenerateContinuousFvD(){
   for(i=0; i<maxTestLoad_Elastomer; i++){
     forceSetting = i;
     SetForce(i);
-    delay(500);//multiplier is because bigger loads take more time
+    delay(50);
     ReadInputPins();
-
     PrintDiagnostic("FvD "+ String(i));
-    PrintStatusToLCD("FvD "+ String(i));
+//    PrintStatusToLCD("FvD "+ String(i));
+    delay(50);
   }
 
   // reset position by pushing up
