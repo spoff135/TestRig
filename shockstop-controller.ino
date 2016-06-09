@@ -1476,7 +1476,7 @@ int WebRunFunction(String command) {
         calibrateInPhase = true;
         return 1;
     }
-    else if(command=="calibrateTwist") {
+    else if(command.substring(0,14)=="calibrateTwist") {
         command = command.substring(14);
         int tempLoad = command.toInt();
         if(tempLoad==tempLoad) calibrateTwistLoad = tempLoad; // check if NaN
