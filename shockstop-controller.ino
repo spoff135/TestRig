@@ -1,4 +1,7 @@
-int version = 692; // version number (month.day.rev)
+// Regulator 1/DAC 1 is pull (down), Pressure Sensor 1
+// Regulator 2/DAC 2 is push (up), Pressure Sensor 0
+
+int version = 6142; // version number (month.day.rev)
 int testMode = 5; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing)
 int cycleCount = 0;
 int cycleTarget = 100000;
@@ -7,6 +10,7 @@ int minStateTime = 200; // minimum amount of time before test fixture looks to s
 int measuredForceBuffer = 5;
 float windowExcursionLimit = 1.1;
 bool webUpdateFlag = true;
+bool errorChecking = true;
 int dashboardRefreshRate = 5000; // dashboard refresh rate (ms)
 int testNumber = 1; // automatically incremented with each test
 
@@ -33,7 +37,6 @@ http_response_t response;
 //UBIDOTS CODE
 
 int LCDrefreshRate = 300; //LCD refresh rate (ms)
-
 
 // Define digital pins
 int leftUp = D2; // relay 1
@@ -118,7 +121,6 @@ String errorMsg = "";
 bool dataLoggerStatus = false;
 bool pressureSensorStatus = false;
 bool errorFlag = false;
-bool errorChecking = false;
 int displayMode = 0; // can be mode 0, 1 or 2
 int disp1 = 0; // display mode modifier
 int leftDucerPosBits = 0; //value used to store voltage in bits
@@ -129,7 +131,7 @@ float pushPressurePSI = 0; // value used to store right cylinder push pressure i
 float pullPressurePSI = 0; // value used to store left cylinder push pressure in PSI
 float state1Force = 0; // updated in CheckStateConditions
 float state2Force = 0; // updated in CheckStateConditions
-float measuredPushForce = 0; // = pushPpressurePSI * area in^2
+float measuredPushForce = 0; // = pushPressurePSI * area in^2
 float measuredPullForce = 0; // = pullPressurePSI * area in^2
 float leftDucerPosInch = 0; // value used to store position in inches from zero position
 float rightDucerPosInch = 0; // value used to store position in inches from zero position
@@ -241,7 +243,7 @@ void loop()
 
         PrintStatusToLCD("Run");
 
-        delay(1);//tbd deleteme
+        //delay(1);//tbd moved to ReadInputPins
     }
 
     // Update deflection total and average and check against window
@@ -522,14 +524,10 @@ void ReadInputPins(){
         lastI2Cupdate = millis();
     }
 
-    if(currentState == 1){
-      pushPressurePSI = ReadDigitalPressureSensor(1);
-      measuredPushForce = pushPressurePSI * pushArea;
-    }
-    else if(currentState == 2){
-      pullPressurePSI = ReadDigitalPressureSensor(0);
-      measuredPullForce = pullPressurePSI * pullArea;
-    }
+    pushPressurePSI = ReadDigitalPressureSensor(1);
+    measuredPushForce = pushPressurePSI * pushArea;
+    pullPressurePSI = ReadDigitalPressureSensor(0);
+    measuredPullForce = pullPressurePSI * pullArea;
 
     // Check tank pressure and turn on/off as necessary
     tankPressurePSI = 0.1 * ReadAnalogPressureSensor() + (0.9) * tankPressurePSI; // poor man's running average (alpha factor of 0.1)
@@ -666,7 +664,7 @@ int PrintStatusToLCD(String origMsg){
         if(displayMode==0){
             ClearLCD();
 
-            msg = "Ver:" + String(version) + " T"+ String(testNumber) + " M" + String(testMode);
+            msg = "Ver:" + String(version) + " E"+ String(errorCountConsecutive) + " M" + String(testMode);
             msg += "                "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
             WriteLineToLCD(msg,1);
 
@@ -693,7 +691,7 @@ int PrintStatusToLCD(String origMsg){
 
             lastLCDupdate = millis();
         }
-        else if(displayMode==2){
+        else if(displayMode==1){
             msg = "M" + String(testMode);
             msg += "/" + String(refDeflection,3);
             msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
@@ -719,21 +717,20 @@ int PrintStatusToLCD(String origMsg){
 
             lastLCDupdate = millis();
         }
-        else if(displayMode==1){
+        else if(displayMode==2){
             msg = origMsg;
+            msg += "Ver:" + String(version);
             msg += " Fs:" + String(forceSetting,0);
-            msg += " #" + String(cycleCount);
-            msg += " " + String(timeLeft) + "min";
             msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
             WriteLineToLCD(msg,1);
 
-            msg = "Pull:" + String(measuredPullForce,1);
+            msg = "Pll:" + String(measuredPullForce,1);
             msg += " Ps" + String(PSI1setting,1);
             msg += " P" + String(pullPressurePSI,1);
             msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
             WriteLineToLCD(msg,2);
 
-            msg = "Push:" + String(measuredPushForce,1);
+            msg = "Psh:" + String(measuredPushForce,1);
             msg += " Ps" + String(PSI2setting,1);
             msg += " P" + String(pushPressurePSI,1);
             msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
@@ -818,7 +815,7 @@ void UpdateDashboard(){
 
 //------------------------------------------------------------------------
 void PrintDiagnostic(String stateStr){
-    // Message Header "Time,SystemState,cycleCount,testNumber,ForceSet,PSI1set,PSI2set,pushPressurePSI,pullPressurePSI,DAC1_bits,leftDucerPosBits,rightDucerPosBits,leftDucerPosInch,rightDucerPosInch,lastNeutralLeft,lastNeutralRight"
+    // Message Header "Time,SystemState,cycleCount,testNumber,ForceSet,PSI1set,PSI2set,pullPressurePSI,pushPressurePSI,DAC1_bits,leftDucerPosBits,rightDucerPosBits,leftDucerPosInch,rightDucerPosInch,lastNeutralLeft,lastNeutralRight"
     String msg = "";
 
     msg += String(Time.now()) + ",";
@@ -1221,7 +1218,7 @@ float ReadDigitalPressureSensor(int pressureSensorSelector){
     // Change mux to appropriate sensor
     if(pressureSensorSelector == 0) analogWrite(muxSelectorPin, 255);
     else if(pressureSensorSelector == 1) analogWrite(muxSelectorPin, 0);
-//    delay(1); tbd delay needed to switch mux?
+    delay(10);// tbd delay needed to switch mux?
 
     uint16_t byte1 = 0; // stores 1st byte
     uint8_t byte2 = 0;// stores 2nd byte
@@ -1669,33 +1666,35 @@ int WebSetTimeout(String tStr){
     }
 }// WebSetTimeout
 
+
 void TestPressureSensors(){
 
-  SetPressure(15,1);
-  SetPressure(15,2);
-  PushUp();
-  delay(2000);
-  ReadDigitalPressureSensor(1);
-  PrintStatusToLCD(String(pushPressurePSI,1));
-  KillRelays();
-  delay(3000);
-
-  SetPressure(20,1);
-  SetPressure(20,2);
+  SetPressure(10,1);
+  SetPressure(10,2);
   PushDown();
-  delay(2000);
+  delay(1000);
   ReadDigitalPressureSensor(0);
-  PrintStatusToLCD(String(pullPressurePSI,1));
+  delay(500);
+  WriteLineToLCD("0: ps " + String(pushPressurePSI,1) + " pl " + String(pushPressurePSI,1),1);
+  delay(500);
+  ReadDigitalPressureSensor(1);
+  delay(500);
+  WriteLineToLCD("1: ps " + String(pushPressurePSI,1) + " pl " + String(pushPressurePSI,1),2);
+  delay(2000);
   KillRelays();
-  delay(3000);
-  analogWrite(muxSelectorPin, 0);
-  delay(3000);
-  analogWrite(muxSelectorPin, 50);
-  delay(3000);
-  analogWrite(muxSelectorPin, 100);
-  delay(3000);
-  analogWrite(muxSelectorPin, 150);
-  delay(3000);
-  analogWrite(muxSelectorPin, 200);
-  delay(3000);
+
+  SetPressure(12,1);
+  SetPressure(12,2);
+  PushUp();
+  delay(1000);
+  ReadDigitalPressureSensor(0);
+  delay(500);
+  WriteLineToLCD("0: ps " + String(pushPressurePSI,1) + " pl " + String(pullPressurePSI,1),1);
+  delay(500);
+  ReadDigitalPressureSensor(1);
+  delay(500);
+  WriteLineToLCD("1: ps " + String(pushPressurePSI,1) + " pl " + String(pullPressurePSI,1),2);
+  delay(2000);
+  KillRelays();
+
 }
