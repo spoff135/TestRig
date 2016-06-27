@@ -1,7 +1,7 @@
 // Regulator 1/DAC 1 is pull (down), Pressure Sensor 1
 // Regulator 2/DAC 2 is push (up), Pressure Sensor 0
 
-int version = 6142; // version number (month.day.rev)
+int version = 6271; // version number (month.day.rev)
 int testMode = 5; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing)
 int cycleCount = 0;
 int cycleTarget = 100000;
@@ -464,7 +464,7 @@ float CalculateDeflection(){
     float rightDef = positionRight[2]-positionRight[1];
     if(rightDef < 0) rightDef = rightDef*-1;
 
-    float totalDef = leftDef + rightDef;
+    float totalDef = (leftDef + rightDef)/2;
     return totalDef;
 }// CalculateDeflection
 
