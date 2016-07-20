@@ -1,15 +1,15 @@
 // Regulator 1/DAC 1 is pull (down), Pressure Sensor 1
 // Regulator 2/DAC 2 is push (up), Pressure Sensor 0
 
-int version = 6271; // version number (month.day.rev)
-int testMode = 5; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing)
+int version = 7202; // version number (month.day.rev)
+int testMode = 6; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing right only, 6=elastomer testing both cylinders)
 int cycleCount = 0;
 int cycleTarget = 100000;
 int stateTimeout[3] = {2000,2000,2000}; // time (ms) before automatic state change
 int minStateTime = 200; // minimum amount of time before test fixture looks to see if state has reached desired pressure
 int measuredForceBuffer = 5;
-float windowExcursionLimit = 1.1;
-bool webUpdateFlag = true;
+float windowExcursionLimit = 1.3;
+bool webUpdateFlag = false;
 bool errorChecking = true;
 int dashboardRefreshRate = 5000; // dashboard refresh rate (ms)
 int testNumber = 1; // automatically incremented with each test
@@ -115,7 +115,7 @@ int DAC1_bits = 0; // current setting of DAC1
 int DAC2_bits = 0; // current setting of DAC2
 float PSI1setting = 0; // current setting of DAC1 in PSI
 float PSI2setting = 0; // current setting of DAC2 in PSI
-float forceSetting = 0; // current force setting
+float forceSetting = 1; // current force setting
 String errorMsg = "";
     // Measured state flags/variables
 bool dataLoggerStatus = false;
@@ -220,11 +220,13 @@ void loop()
     bool stateChange = false;
     currentState = 1; // start in state 1.
     SetState(currentState);
+    stateStartTime = millis();
 
     if(cycleCount>=cycleTarget) paused=true; // pause test if cycleTarget is reached
 
     while(!paused && currentState<=nStates && testMode>0){
         ReadInputPins();
+        stateTime = millis()-stateStartTime;
         stateChange = CheckStateConditions(currentState);
         if(stateChange){
 
@@ -239,10 +241,7 @@ void loop()
             }
             else break;
         }
-        stateTime = millis()-stateStartTime;
-
         PrintStatusToLCD("Run");
-
         //delay(1);//tbd moved to ReadInputPins
     }
 
@@ -276,6 +275,7 @@ void loop()
     if(errorCountConsecutive > 1 && errorChecking){
         paused = true;
         errorFlag = true;
+        errorCountConsecutive = 0;
     }
 
     PrintStatusToLCD("Run");
@@ -294,10 +294,13 @@ bool CheckStateConditions(int currentState){
     bool stateChange = false;
 
     switch (currentState) {
+    case 0:
+      stateChange = false;
+      break;
     case 1:
         if(stateTime > stateTimeout[currentState]) stateChange = true;
         if(usePressureGauge && stateTime > minStateTime && measuredPushForce > (forceSetting + measuredForceBuffer) ) stateChange = true;
-        if(stateChange){
+        if(stateChange && (testMode==1 || testMode==2) ){
           state1Force = measuredPushForce;
           if(state1Force < forceSetting){
             PSI2setting+=0.1;
@@ -307,13 +310,12 @@ bool CheckStateConditions(int currentState){
             PSI2setting-=0.1;
             SetPressure(PSI2setting,2);
           }
-
         }
         break;
     case 2:
         if(stateTime > stateTimeout[currentState]) stateChange = true;
         if(usePressureGauge && stateTime > minStateTime && measuredPullForce > (forceSetting + measuredForceBuffer) ) stateChange = true;
-        if(stateChange){
+        if(stateChange && (testMode==1 || testMode==2) ){
           state2Force = measuredPullForce;
           if(state2Force < forceSetting){
             PSI1setting+=0.1;
@@ -323,7 +325,6 @@ bool CheckStateConditions(int currentState){
             PSI1setting-=0.1;
             SetPressure(PSI1setting,1);
           }
-
         }
         break;
     case 3:
@@ -403,8 +404,19 @@ void SetState(int currentState){
             break;
         }
     }
+    else if(testMode==6){ // elastomer testing (both cylinders)
+        switch (currentState) {
+        case 1:
+            KillRelays();
+            break;
+        case 2:
+            PushDown();
+            cycleCount++;
+            break;
+        }
+    }
     else {
-//        KillAll();
+        KillRelays();
     }
 }// SetState
 
@@ -443,6 +455,10 @@ void SetMode(int testMode){
         testMode = 5;
         nStates = 2;
         break;
+    case 6: // elastomer testing (both cylinders)
+      testMode = 6;
+      nStates = 2;
+      break;
     default:
         testMode = 0;
         nStates = 0;
@@ -606,21 +622,35 @@ void RunCalibrations(){
         testRelay = false;
     }
 
+    bool stateChange = false;
     if(calibrateWindow){
-        ResetNeutral();
+        if(testMode!=4){
+          ResetNeutral();
+        }
 
         // run through each state and record the final deflection to set deflectionWindow
         int i;
-        for(i=0;i<=nStates;i++){
-            PrintStatusToLCD("Calibrate State " + String(i));
-            SetState(i);
-            delay(stateTimeout[i]);
-            ReadInputPins();
-            refPositionLeft[i] = leftDucerPosInch;
-            refPositionRight[i] = rightDucerPosInch;
+        int j;
+        int numCalibrationCycles = 5;
+        for(j=0;j<numCalibrationCycles;j++){
+          for(i=1;i<=nStates;i++){
+              PrintStatusToLCD("Calibrate State " + String(i));
+              SetState(i);
+              stateStartTime = millis();
+              stateChange = false;
 
-            positionLeft[i] = leftDucerPosInch; // added these so "CalculateDeflection" has something to reference.
-            positionRight[i] = rightDucerPosInch;
+              while(stateChange == false){
+                  ReadInputPins();
+                  stateTime = millis()-stateStartTime;
+                  stateChange = CheckStateConditions(i);
+              }
+
+              refPositionLeft[i] = leftDucerPosInch;
+              refPositionRight[i] = rightDucerPosInch;
+
+              positionLeft[i] = leftDucerPosInch; // added these so "CalculateDeflection" has something to reference.
+              positionRight[i] = rightDucerPosInch;
+          }
         }
 
         // update reference deflection
@@ -635,7 +665,9 @@ void RunCalibrations(){
 
         calibrateWindow = false;
         PrintStatusToLCD("");
-        ResetNeutral();
+        if(testMode!=4){
+          ResetNeutral();
+        }
         delay(2000);
     }
 }// RunCalibrations
@@ -685,10 +717,6 @@ int PrintStatusToLCD(String origMsg){
             msg += "         ";
             WriteLineToLCD(msg,4);
 
-//            msg = "L" + String(leftDucerPosInch,3);
-//            msg += " R" + String(rightDucerPosInch,3);
-//            msg += "         ";WriteLineToLCD(msg,4);
-
             lastLCDupdate = millis();
         }
         else if(displayMode==1){
@@ -718,32 +746,50 @@ int PrintStatusToLCD(String origMsg){
             lastLCDupdate = millis();
         }
         else if(displayMode==2){
-            msg = origMsg;
-            msg += "Ver:" + String(version);
-            msg += " Fs:" + String(forceSetting,0);
-            msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
-            WriteLineToLCD(msg,1);
+          msg = origMsg;
+          msg += "                 "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
+          WriteLineToLCD(msg,1);
 
-            msg = "Pll:" + String(measuredPullForce,1);
-            msg += " Ps" + String(PSI1setting,1);
-            msg += " P" + String(pullPressurePSI,1);
-            msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
-            WriteLineToLCD(msg,2);
+          msg = "L: " + String(leftDucerPosInch,3);
+          msg += " R: " + String(rightDucerPosInch, 3);
+          msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
+          WriteLineToLCD(msg,2);
 
-            msg = "Psh:" + String(measuredPushForce,1);
-            msg += " Ps" + String(PSI2setting,1);
-            msg += " P" + String(pushPressurePSI,1);
-            msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
-            WriteLineToLCD(msg,3);
+          msg = "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
+          WriteLineToLCD(msg,3);
 
-            msg = "Defl " + String(deflection,2);
-            msg += "/" + String(deflectionAvg,3);
-            msg += "/" + String(deflectionMax,3);
-            msg += "         ";
-            WriteLineToLCD(msg,4);
-
-            lastLCDupdate = millis();
+          msg += "Ver:" + String(version);
+          msg += " Fs:" + String(forceSetting,0);
+          msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
+          WriteLineToLCD(msg,4);
+          lastLCDupdate = millis();
         }
+
+//USE THIS FOR DIAGNOSING PRESSURE GAUGE READINGS
+        /*msg = origMsg;
+        msg += "Ver:" + String(version);
+        msg += " Fs:" + String(forceSetting,0);
+        msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
+        WriteLineToLCD(msg,1);
+
+        msg = "Pll:" + String(measuredPullForce,1);
+        msg += " Ps" + String(PSI1setting,1);
+        msg += " P" + String(pullPressurePSI,1);
+        msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
+        WriteLineToLCD(msg,2);
+
+        msg = "Psh:" + String(measuredPushForce,1);
+        msg += " Ps" + String(PSI2setting,1);
+        msg += " P" + String(pushPressurePSI,1);
+        msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
+        WriteLineToLCD(msg,3);
+
+        msg = "Defl " + String(deflection,2);
+        msg += "/" + String(deflectionAvg,3);
+        msg += "/" + String(deflectionMax,3);
+        msg += "         ";
+        WriteLineToLCD(msg,4);*/
+
 
     }
     return 1;
@@ -1047,12 +1093,15 @@ void GenerateElastomerFvD(){
     delay(250);
     for(i=0; i<3; i++){ // cycle max load down 3 times to "set" elastomer
       SetForce(maxTestLoad_Elastomer);
-      RightDown();
+      if(testMode==5) RightDown();
+      else if(testMode==6) PushDown();
       delay(1000);
       SetForce(5);
-      RightUp();
+      if(testMode==5) RightUp();
+      else if(testMode==6) PushUp();
       delay(2000);
     }
+    KillAll();
     delay(10000); // delay 10s to allow elastomer to recover
 
     // Record max up position
@@ -1083,7 +1132,10 @@ void GenerateElastomerFvD(){
           if(i>16) i+=3; // after 16 lbs, increment by a total of 5
           forceSetting = i;
           SetForce(i);
-          RightDown();
+
+          if(testMode==5) RightDown();
+          else if(testMode==6) PushDown();
+
           delay(1000+i*5);//multiplier is because bigger loads take more time
           ReadInputPins();
           KillAll();
@@ -1308,13 +1360,13 @@ int CheckI2C(int address){
 void ResetNeutral(){
     SetForce(25);
     delay(250);
-    if(testMode!=1 && testMode!=5){
+    if(testMode!=1 && testMode!=5 && testMode!=6){
         PushDown();
         delay(200);
     }
     PushUp();
     delay(500);
-    if(testMode==1 || testMode==5){ //when in mode 1 or 5, want "neutral" to be a lower reference point than fully topped out.
+    if(testMode==1 || testMode==5 && testMode!=6){ //when in mode 1, 5, or 6, want "neutral" to be a lower reference point than fully topped out.
         PushDown();
         delay(300);
     }
@@ -1435,6 +1487,7 @@ void PauseAll(){
 
     SetForce(forceSetting);
     ClearLCD();
+    delay(500); // to allow force to reset before resuming testing
 
     // Reset timers
     compressorStartTime = millis();
