@@ -1,7 +1,7 @@
 // Regulator 1/DAC 1 is pull (down), Pressure Sensor 1
 // Regulator 2/DAC 2 is push (up), Pressure Sensor 0
 
-int version = 7202; // version number (month.day.rev)
+int version = 7204; // version number (month.day.rev)
 int testMode = 6; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing right only, 6=elastomer testing both cylinders)
 int cycleCount = 0;
 int cycleTarget = 100000;
@@ -467,7 +467,7 @@ void SetMode(int testMode){
         break;
     }
 
-    calibrateWindow = true;
+//tbd    calibrateWindow = true;
 }// SetMode
 
 
@@ -705,7 +705,7 @@ int PrintStatusToLCD(String origMsg){
             msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
             WriteLineToLCD(msg,2);
 
-            if(useI2C) msg = origMsg + " | D:" + String(dataLoggerStatus) + " S:" + String(currentState) + " T:" + String(testNumber);
+            if(useI2C) msg = origMsg + " |D" + String(dataLoggerStatus) + " P" + String(pressureSensorStatus) + " S" + String(currentState) + " T" + String(testNumber);
             else msg = origMsg + " | I2C Off";
             msg += "         ";
             WriteLineToLCD(msg,3);
@@ -746,7 +746,8 @@ int PrintStatusToLCD(String origMsg){
             lastLCDupdate = millis();
         }
         else if(displayMode==2){
-          msg = origMsg;
+
+/*          msg = origMsg;
           msg += "                 "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
           WriteLineToLCD(msg,1);
 
@@ -764,9 +765,10 @@ int PrintStatusToLCD(String origMsg){
           WriteLineToLCD(msg,4);
           lastLCDupdate = millis();
         }
+*/
 
 //USE THIS FOR DIAGNOSING PRESSURE GAUGE READINGS
-        /*msg = origMsg;
+        msg = origMsg;
         msg += "Ver:" + String(version);
         msg += " Fs:" + String(forceSetting,0);
         msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
@@ -788,9 +790,9 @@ int PrintStatusToLCD(String origMsg){
         msg += "/" + String(deflectionAvg,3);
         msg += "/" + String(deflectionMax,3);
         msg += "         ";
-        WriteLineToLCD(msg,4);*/
+        WriteLineToLCD(msg,4);
 
-
+      }
     }
     return 1;
 }// PrintStatusToLCD
@@ -866,8 +868,10 @@ void PrintDiagnostic(String stateStr){
 
     msg += String(Time.now()) + ",";
     msg += stateStr + ",";
-    msg += String(cycleCount) + ",";
-    msg += String(testNumber) + ",";
+    msg += String(measuredPushForce,2) + ",";
+    msg += String(measuredPullForce,2) + ",";
+//    msg += String(cycleCount) + ",";
+//    msg += String(testNumber) + ",";
     msg += String(forceSetting,2) + ",";
     msg += String(PSI1setting,2) + ","; //pull
     msg += String(PSI2setting,2) + ","; //push
@@ -901,17 +905,17 @@ void CycleInPhase(int numCycles, int force){
     PrintStatusToLCD("Neutral");
 
     for(i=0; i<numCycles; i++){
-        PushDown();
-        delay(delayMS);
-        ReadInputPins();
-        PrintDiagnostic("Low");
-        PrintStatusToLCD("Low");
+      PushDown();
+      delay(delayMS);
+      ReadInputPins();
+      PrintDiagnostic("Low");
+      PrintStatusToLCD("Low");
 
     	PushUp();
-        delay(delayMS);
-        ReadInputPins();
+      delay(delayMS);
+      ReadInputPins();
     	PrintDiagnostic("High");
-        PrintStatusToLCD("High");
+      PrintStatusToLCD("High");
     }
 
     ResetNeutral();
@@ -1096,10 +1100,12 @@ void GenerateElastomerFvD(){
       if(testMode==5) RightDown();
       else if(testMode==6) PushDown();
       delay(1000);
+      PrintStatusToLCD("");
       SetForce(5);
       if(testMode==5) RightUp();
       else if(testMode==6) PushUp();
       delay(2000);
+      PrintStatusToLCD("");
     }
     KillAll();
     delay(10000); // delay 10s to allow elastomer to recover
@@ -1116,6 +1122,7 @@ void GenerateElastomerFvD(){
     // Record "neutral" position
     SetForce(0);
     PushDown();
+    delay(1000);
     ReadInputPins();
     PrintDiagnostic("Neutral");
     PrintStatusToLCD("Neutral");
@@ -1138,9 +1145,6 @@ void GenerateElastomerFvD(){
 
           delay(1000+i*5);//multiplier is because bigger loads take more time
           ReadInputPins();
-          KillAll();
-          delay(500);
-
           // record these values now (fixes bug related to ubidots output being overwritten by a later call to ReadInputPins)
           float tempMF = measuredPullForce;
           float tempFS = forceSetting;
@@ -1148,6 +1152,9 @@ void GenerateElastomerFvD(){
 
           PrintDiagnostic("FvD "+ String(i));
           PrintStatusToLCD("FvD "+ String(i));
+
+          KillAll();
+          delay(500);
 
           // reset position by pushing up
           SetForce(5);
@@ -1218,6 +1225,9 @@ void TestRelays(){
 // added interpolation between 0 and 3 just in case regulator has that range
 int SetPressure(float pressure, int dacNum){
     int retVal = 0;
+
+// Input Checking
+    if(pressure<0) return 0;
 
     if(pressure<3){
         float temp = (pressure-0)/3;
@@ -1722,17 +1732,24 @@ int WebSetTimeout(String tStr){
 
 void TestPressureSensors(){
 
+
+  int p1Status = 0;
+  int p2Status = 0;
+
+  analogWrite(muxSelectorPin, 0);
+  p1Status = CheckI2C(pressureSensorAddress);
+  analogWrite(muxSelectorPin, 255);
+  p2Status = CheckI2C(pressureSensorAddress);
+
+  WriteLineToLCD("I2C Check: P1=" + String(p1Status) + " P2=" + String(p2Status),1);
+
   SetPressure(10,1);
   SetPressure(10,2);
   PushDown();
   delay(1000);
-  ReadDigitalPressureSensor(0);
+  ReadInputPins();
   delay(500);
-  WriteLineToLCD("0: ps " + String(pushPressurePSI,1) + " pl " + String(pushPressurePSI,1),1);
-  delay(500);
-  ReadDigitalPressureSensor(1);
-  delay(500);
-  WriteLineToLCD("1: ps " + String(pushPressurePSI,1) + " pl " + String(pushPressurePSI,1),2);
+  WriteLineToLCD("Pull: ps " + String(pushPressurePSI,1) + " pl " + String(pullPressurePSI,1),2);
   delay(2000);
   KillRelays();
 
@@ -1740,14 +1757,9 @@ void TestPressureSensors(){
   SetPressure(12,2);
   PushUp();
   delay(1000);
-  ReadDigitalPressureSensor(0);
+  ReadInputPins();
   delay(500);
-  WriteLineToLCD("0: ps " + String(pushPressurePSI,1) + " pl " + String(pullPressurePSI,1),1);
-  delay(500);
-  ReadDigitalPressureSensor(1);
-  delay(500);
-  WriteLineToLCD("1: ps " + String(pushPressurePSI,1) + " pl " + String(pullPressurePSI,1),2);
+  WriteLineToLCD("Push: ps " + String(pushPressurePSI,1) + " pl " + String(pullPressurePSI,1),3);
   delay(2000);
   KillRelays();
-
 }
