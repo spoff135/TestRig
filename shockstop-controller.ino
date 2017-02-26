@@ -1,18 +1,20 @@
 // Regulator 1/DAC 1 is pull (down), Pressure Sensor 1
 // Regulator 2/DAC 2 is push (up), Pressure Sensor 0
 
-int version = 7204; // version number (month.day.rev)
-int testMode = 6; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing right only, 6=elastomer testing both cylinders)
+int version = 1262; // version number (month.day.rev)
+int testMode = 1; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing right only, 6=elastomer testing both cylinders)
 int cycleCount = 0;
 int cycleTarget = 100000;
 int stateTimeout[3] = {2000,2000,2000}; // time (ms) before automatic state change
 int minStateTime = 200; // minimum amount of time before test fixture looks to see if state has reached desired pressure
 int measuredForceBuffer = 5;
-float windowExcursionLimit = 1.3;
+float windowExcursionLimit = 1.15;
 bool webUpdateFlag = false;
 bool errorChecking = true;
-int dashboardRefreshRate = 5000; // dashboard refresh rate (ms)
+int webDashboardRefreshRate = 5000; // web dashboard refresh rate (ms)
+int webUpdateConstantsRate = 50000; // web constants refresh rate (ms)
 int testNumber = 1; // automatically incremented with each test
+float mode7Ratio = 0.2; // ratio of downforce to upforce in up-only (mode 7) test
 
 //UBIDOTS CODE
 #include "HttpClient.h"  // if using webIDE, use this: #include "HttpClient/HttpClient.h"
@@ -20,9 +22,14 @@ int testNumber = 1; // automatically incremented with each test
 #define WEB_DEFLECTION "56cc63b6762542644cc8d2ef"
 #define WEB_CYCLES "56b672cb7625422dd8dbbf52"
 #define WEB_COMPRESSOR_STATE "56cc62f37625425f3cd6aeb2"
-#define WEB_FORCE_UP "56cc62a27625425dba666c80"
-#define WEB_FORCE_DOWN "56cc666d7625427368e80d6e"
+#define WEB_FORCE_DOWN "56cc62a27625425dba666c80"
+#define WEB_FORCE_UP "56cc666d7625427368e80d6e"
 #define WEB_FORCE_INPUT "56cc62db7625425f3cd6ae79"
+#define WEB_POSITION_RIGHT "57923c897625423072003e71"
+#define WEB_POSITION_LEFT "57923c937625423072003ec0"
+#define WEB_POSITION_UP "57923cfe76254237a3daea81"
+#define WEB_POSITION_DOWN "57923d0476254237cebbf5c3"
+#define WEB_DEFLECTION_LIMIT "57acfcf47625425735b8b407"
 
 HttpClient http;
 // Headers currently need to be set at init, useful for API keys etc.
@@ -43,7 +50,7 @@ int leftUp = D2; // relay 1
 int rightUp = D3; // relay 2
 int leftDown = D4; // relay 3
 int rightDown = D5; // relay 4
-int displayTogglePin = D6; // toggle switch for display
+// PIN D6 is OPEN
 int compressorRelayPin = D7; // pin for compressor on/off relay
 int testRelayPin = 0; // updated by calibrate function
 
@@ -98,6 +105,7 @@ long timeLeft = 0; // estimated time remaining to reach cycleTarget
 long lastLCDupdate = 0; //time of last LCD update
 long lastI2Cupdate = 0; // time of last I2C status check
 long lastDashboardUpdate = 0; // time of last dashboard update
+long lastWebConstantsUpdate = 0; // time of last web constants update
 long compressorStartTime = 0; // time in ms that compressor was turned on
 long compressorStopTime = 0; // time in ms that compressor was turned off
 long compressorOnTime = 0; // # of ms compressor was on
@@ -107,6 +115,7 @@ long stateTime = 0; // elapsed time (ms) in current state
     // outputs state flags/variables
 bool paused = true;
 bool statusUpdate = true;
+bool webUpdateConstants = true; // used to send data web dashboard that doesn't change often
 bool useI2C = true;
 bool usePressureGauge = false;
 bool compressorOn = false;
@@ -121,7 +130,7 @@ String errorMsg = "";
 bool dataLoggerStatus = false;
 bool pressureSensorStatus = false;
 bool errorFlag = false;
-int displayMode = 0; // can be mode 0, 1 or 2
+int displayMode = 0; // can be mode 0, 1, 2, or 3
 int disp1 = 0; // display mode modifier
 int leftDucerPosBits = 0; //value used to store voltage in bits
 int rightDucerPosBits = 0; //value used to store voltage in bits
@@ -143,6 +152,7 @@ float refPositionLeft[3] = {0,0,0}; // reference position from calibration of st
 float refPositionRight[3] = {0,0,0};
 float refPositionLeftWindow[3] = {0,0,0}; // max deviation allowed from reference position of state [i]
 float refPositionRightWindow[3] = {0,0,0};
+float positionAvg[3] = {0,0,0}; // avg position at end of state [i]
 float deflection; // Total deflection
 float deflectionAvg; // deflection running average
 float refDeflection; // Total deflection measured during most recent calibration
@@ -155,7 +165,7 @@ bool testRelay = false;
 bool testRelays = false;
 bool testCylinder = false;
 bool calibrateInPhase = false;
-bool calibrateOutOfPhase = false;
+bool twistFvD = false;
 bool calibratePressure = false;
 bool calibrateWindow = false;
 bool generateFvD = false; // generates force vs displacement graph
@@ -175,7 +185,6 @@ void setup()
     pinMode(rightUp, OUTPUT);
     pinMode(leftDown, OUTPUT);
     pinMode(rightDown, OUTPUT);
-    pinMode(displayTogglePin, INPUT);
 
     // Declare a Particle.functions so that we can access them from the cloud.
     Particle.function("psi",WebTestPressure);
@@ -233,6 +242,7 @@ void loop()
             // Before changing state, update positions
             positionLeft[currentState] = leftDucerPosInch;
             positionRight[currentState] = rightDucerPosInch;
+            positionAvg[currentState] = (rightDucerPosInch + leftDucerPosInch)/2;
 
             if(!paused){
                 currentState = currentState+1;
@@ -242,7 +252,6 @@ void loop()
             else break;
         }
         PrintStatusToLCD("Run");
-        //delay(1);//tbd moved to ReadInputPins
     }
 
     // Update deflection total and average and check against window
@@ -300,7 +309,7 @@ bool CheckStateConditions(int currentState){
     case 1:
         if(stateTime > stateTimeout[currentState]) stateChange = true;
         if(usePressureGauge && stateTime > minStateTime && measuredPushForce > (forceSetting + measuredForceBuffer) ) stateChange = true;
-        if(stateChange && (testMode==1 || testMode==2) ){
+        if(stateChange && (testMode==1 || testMode==2 || testMode==7) ){
           state1Force = measuredPushForce;
           if(state1Force < forceSetting){
             PSI2setting+=0.1;
@@ -315,8 +324,9 @@ bool CheckStateConditions(int currentState){
     case 2:
         if(stateTime > stateTimeout[currentState]) stateChange = true;
         if(usePressureGauge && stateTime > minStateTime && measuredPullForce > (forceSetting + measuredForceBuffer) ) stateChange = true;
-        if(stateChange && (testMode==1 || testMode==2) ){
+        if(stateChange && (testMode==1 || testMode==2 || testMode==3 || testMode==7) ){
           state2Force = measuredPullForce;
+          if(testMode==7) state2Force = state2Force/mode7Ratio; // for up-only test, scale up reading to match up force
           if(state2Force < forceSetting){
             PSI1setting+=0.1;
             SetPressure(PSI1setting,1);
@@ -415,6 +425,17 @@ void SetState(int currentState){
             break;
         }
     }
+    else if(testMode==7){ // up-only ISO in-phase testing
+      switch (currentState) {
+      case 1:
+        PushUp();
+        break;
+      case 2:
+        PushDown();
+        cycleCount++;
+        break;
+      }
+    }
     else {
         KillRelays();
     }
@@ -457,6 +478,10 @@ void SetMode(int testMode){
         break;
     case 6: // elastomer testing (both cylinders)
       testMode = 6;
+      nStates = 2;
+      break;
+    case 7: // up-only ISO in-phase testing
+      testMode = 7;
       nStates = 2;
       break;
     default:
@@ -569,9 +594,6 @@ void ReadInputPins(){
     leftDucerPosInch = leftDucerPosBits * 0.00096118; // based on 100mm ducer/4096 bits = .00096118"/bit
     rightDucerPosInch = rightDucerPosBits * 0.00096118; // based on 100mm ducer/4096 bits = .00096118"/bit
 
-    // Read Display Switch
-    displayMode = digitalRead(displayTogglePin) + disp1;
-
     // update timeLeft
     timeLeft =  ( (cycleTarget-cycleCount) * (stateTimeout[currentState]+stateTimeout[currentState])/2.0 * nStates ) / 60000.0;
 }// ReadInputPins
@@ -584,12 +606,6 @@ void RunCalibrations(){
         calibrateInPhase = false;
     }
 
-    if(calibrateOutOfPhase){
-        for(i=5; i<=calibrateTwistLoad; i+=5)
-        CycleOutOfPhase(5,i);
-        calibrateOutOfPhase = false;
-    }
-
     if(calibratePressure){
         CalibratePressure();
         calibratePressure = false;
@@ -598,6 +614,11 @@ void RunCalibrations(){
     if(generateFvD){
         GenerateFvD();
         generateFvD = false;
+    }
+
+    if(twistFvD){
+      GenerateTwistFvD();
+      twistFvD = false;
     }
 
     if(elastomerFvD){
@@ -690,7 +711,7 @@ int PrintStatus(String msg){
 
 //------------------------------------------------------------------------
 // Prints measured and state variables to LCD
-int PrintStatusToLCD(String origMsg){
+void PrintStatusToLCD(String origMsg){
     String msg = "";
     if(millis()-lastLCDupdate > LCDrefreshRate){
         if(displayMode==0){
@@ -746,27 +767,6 @@ int PrintStatusToLCD(String origMsg){
             lastLCDupdate = millis();
         }
         else if(displayMode==2){
-
-/*          msg = origMsg;
-          msg += "                 "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
-          WriteLineToLCD(msg,1);
-
-          msg = "L: " + String(leftDucerPosInch,3);
-          msg += " R: " + String(rightDucerPosInch, 3);
-          msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
-          WriteLineToLCD(msg,2);
-
-          msg = "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
-          WriteLineToLCD(msg,3);
-
-          msg += "Ver:" + String(version);
-          msg += " Fs:" + String(forceSetting,0);
-          msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
-          WriteLineToLCD(msg,4);
-          lastLCDupdate = millis();
-        }
-*/
-
 //USE THIS FOR DIAGNOSING PRESSURE GAUGE READINGS
         msg = origMsg;
         msg += "Ver:" + String(version);
@@ -791,10 +791,28 @@ int PrintStatusToLCD(String origMsg){
         msg += "/" + String(deflectionMax,3);
         msg += "         ";
         WriteLineToLCD(msg,4);
+      }
+      else if(displayMode==3){
+// USE THIS FOR VIEWING CYLINDER POSITIONS LIVE
+        msg = origMsg;
+        msg += "                 "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
+        WriteLineToLCD(msg,1);
 
+        msg = "L: " + String(leftDucerPosInch,3);
+        msg += " R: " + String(rightDucerPosInch, 3);
+        msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
+        WriteLineToLCD(msg,2);
+
+        msg = "                  "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
+        WriteLineToLCD(msg,3);
+
+        msg += "Ver:" + String(version);
+        msg += " Fs:" + String(forceSetting,0);
+        msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
+        WriteLineToLCD(msg,4);
+        lastLCDupdate = millis();
       }
     }
-    return 1;
 }// PrintStatusToLCD
 
 
@@ -824,38 +842,35 @@ int PrintMsg(String msg){
 //------------------------------------------------------------------------
 void UpdateDashboard(){
 
-    if(millis()-lastDashboardUpdate > dashboardRefreshRate){
+    if(millis()-lastDashboardUpdate > webDashboardRefreshRate){
+      if(!paused){
+        request.body = "[";
+        request.body += "{\"variable\":\""WEB_CYCLES"\", \"value\": "+String(cycleCount)+" }";
+        request.body += ", { \"variable\":\""WEB_DEFLECTION"\", \"value\": "+String(deflection,3)+" }";
+        request.body += ", { \"variable\":\""WEB_DEFLECTION_AVG"\", \"value\": "+String(deflectionAvg,3)+" }";
+        request.body += ", { \"variable\":\""WEB_FORCE_UP"\", \"value\": "+String(state1Force,1)+" }";
+        request.body += ", { \"variable\":\""WEB_FORCE_DOWN"\", \"value\": "+String(state2Force,1)+" }";
+        request.body += ", { \"variable\":\""WEB_COMPRESSOR_STATE"\", \"value\": "+String(compressorOn)+" }";
+        request.body += ", { \"variable\":\""WEB_POSITION_UP"\", \"value\": "+String(positionAvg[1])+" }";
+        request.body += ", { \"variable\":\""WEB_POSITION_DOWN"\", \"value\": "+String(positionAvg[2])+" }";
+        if(webUpdateConstants || millis()-lastWebConstantsUpdate > webUpdateConstantsRate) {
+          request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": "+String(forceSetting)+" }";
+          request.body += ", { \"variable\":\""WEB_DEFLECTION_LIMIT"\", \"value\": "+String(deflectionMax)+" }";
+          webUpdateConstants = false;
+        }
+        request.body += "]";
+        request.path = "/api/v1.6/collections/values/";
+        http.post(request, response, headers);
+      }
+      else {
+        request.body = "[";
+        request.body += "{\"variable\":\""WEB_CYCLES"\", \"value\": "+String(cycleCount)+" }";
+        request.body += ", { \"variable\":\""WEB_COMPRESSOR_STATE"\", \"value\": "+String(compressorOn)+" }";
+        request.body += "]";
+        request.path = "/api/v1.6/collections/values/";
+        http.post(request, response, headers);
+      }
 
-      request.body = "[";
-      request.body += "{\"variable\":\""WEB_CYCLES"\", \"value\": "+String(cycleCount)+" }";
-      request.body += ", { \"variable\":\""WEB_DEFLECTION"\", \"value\": "+String(deflection,3)+" }";
-      request.body += ", { \"variable\":\""WEB_DEFLECTION_AVG"\", \"value\": "+String(deflectionAvg,3)+" }";
-      request.body += ", { \"variable\":\""WEB_FORCE_UP"\", \"value\": "+String(state1Force,1)+" }";
-      request.body += ", { \"variable\":\""WEB_FORCE_DOWN"\", \"value\": "+String(state2Force,1)+" }";
-      request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": "+String(forceSetting)+" }";
-      request.body += ", { \"variable\":\""WEB_COMPRESSOR_STATE"\", \"value\": "+String(compressorOn)+" }";
-            request.body += "]";
-      request.path = "/api/v1.6/collections/values/";
-      http.post(request, response, headers);
-
-/*
-      request.body = "[";
-      request.body += "{\"variable\":\""WEB_CYCLES"\", \"value\": 2}";
-      request.body += ", { \"variable\":\""WEB_DEFLECTION"\", \"value\": 2}";
-      request.body += ", { \"variable\":\""WEB_DEFLECTION_AVG"\", \"value\": 2}";
-      request.body += ", { \"variable\":\""WEB_FORCE"\", \"value\": 2}";
-      request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": 2}";
-      request.body += ", { \"variable\":\""WEB_COMPRESSOR_STATE"\", \"value\": 2}";
-      request.body += "]";
-      request.path = "/api/v1.6/collections/values/";
-      http.post(request, response, headers);
-*/
-
-/*Working code
-      // send deflection avg
-      request.body = "{\"value\":" + String(deflectionAvg,3) + "}";
-      request.path = "/api/v1.6/variables/"WEBDEFLECTION"/values?token="UBIDOTS_TOKEN;
-*/
       lastDashboardUpdate = millis();
     }
 }// UpdateDashboard
@@ -868,10 +883,10 @@ void PrintDiagnostic(String stateStr){
 
     msg += String(Time.now()) + ",";
     msg += stateStr + ",";
-    msg += String(measuredPushForce,2) + ",";
-    msg += String(measuredPullForce,2) + ",";
-//    msg += String(cycleCount) + ",";
-//    msg += String(testNumber) + ",";
+//    msg += String(measuredPushForce,2) + ",";
+//    msg += String(measuredPullForce,2) + ",";
+    msg += String(cycleCount) + ",";
+    msg += String(testNumber) + ",";
     msg += String(forceSetting,2) + ",";
     msg += String(PSI1setting,2) + ","; //pull
     msg += String(PSI2setting,2) + ","; //push
@@ -929,7 +944,7 @@ void CycleInPhase(int numCycles, int force){
 //------------------------------------------------------------------------
 void CycleOutOfPhase(int numCycles, int force){
     int i = 0;
-    int delayMS = 1000;
+    int delayMS = 500;
 
     PrintMsg("");
     PrintMsg("Running out-of-phase test for " + String(numCycles) + " cycles at " + String(force) + " lbs. on " + Time.timeStr());
@@ -955,10 +970,8 @@ void CycleOutOfPhase(int numCycles, int force){
         PrintStatusToLCD("LeftUp");
     }
 
-    ResetNeutral();
-    delay(delayMS);
-    ReadInputPins();
-    PrintDiagnostic("Neutral");
+    KillRelays();
+
     PrintMsg("Test Complete.");
 }// CycleOutOfPhase
 
@@ -1035,6 +1048,23 @@ void GenerateFvD(){
     // increment test number
     testNumber++;
 }// GenerateFvD
+
+
+//------------------------------------------------------------------------
+void GenerateTwistFvD(){
+  int originalForceSetting = forceSetting; // record original force setting to reset to after test
+
+  for(i=5; i<=calibrateTwistLoad; i+=5)
+  CycleOutOfPhase(1,i);
+
+  // reset force setting
+  forceSetting = originalForceSetting;
+  SetForce(forceSetting);
+
+  // increment test number
+  testNumber++;
+}// GenerateTwistFvD
+
 
 void GenerateContinuousFvD(){
   int originalForceSetting = forceSetting; // record original force setting to reset to after test
@@ -1113,7 +1143,8 @@ void GenerateElastomerFvD(){
     // Record max up position
     SetForce(5);
     delay(250);
-    PushUp();
+    if(testMode==5) RightUp();
+    else if(testMode==6) PushUp();
     delay(1000);
     ReadInputPins();
     PrintDiagnostic("Up");
@@ -1121,7 +1152,8 @@ void GenerateElastomerFvD(){
 
     // Record "neutral" position
     SetForce(0);
-    PushDown();
+    if(testMode==5) RightDown();
+    else if(testMode==6) PushDown();
     delay(1000);
     ReadInputPins();
     PrintDiagnostic("Neutral");
@@ -1158,8 +1190,10 @@ void GenerateElastomerFvD(){
 
           // reset position by pushing up
           SetForce(5);
-          PushUp();
+          if(testMode==5) RightUp();
+          else if(testMode==6) PushUp();
           delay(1000+i*5);
+
           KillAll();
           delay(500);
 
@@ -1214,7 +1248,7 @@ void TestRelays(){
     digitalWrite(rightUp,LOW);
     delay(500);
 
-    KillAll();
+    KillRelays();
 
     testRelays = false;
 }// TestRelays
@@ -1347,6 +1381,9 @@ float SetForce(float force){
     }
 
     int retVal = 0;
+    if(testMode==7){
+        p1 = p1*mode7Ratio; // sets downforce to a % of up force (enough to pull off)
+    }
     retVal += SetPressure(p1,1);
     retVal += SetPressure(p2,2);
 
@@ -1502,8 +1539,6 @@ void PauseAll(){
     // Reset timers
     compressorStartTime = millis();
     compressorStopTime = millis();
-
-
 }// PauseAll
 
 
@@ -1532,16 +1567,12 @@ int WebRunFunction(String command) {
         testRelay = true;
         return 1;
     }
-    else if(command=="calibrateUpDown") {
-        calibrateInPhase = true;
-        return 1;
-    }
-    else if(command.substring(0,14)=="calibrateTwist") {
-        command = command.substring(14);
+    else if(command.substring(0,8)=="twistFvD") {
+        command = command.substring(8);
         int tempLoad = command.toInt();
         if(tempLoad==tempLoad) calibrateTwistLoad = tempLoad; // check if NaN
         else return -1;
-        calibrateOutOfPhase = true;
+        twistFvD = true;
         return calibrateTwistLoad;
     }
     else if(command=="calibratePressure"){
@@ -1549,12 +1580,13 @@ int WebRunFunction(String command) {
         return 1;
     }
     else if(command=="calibrateAll"){
-        calibrateOutOfPhase = true;
+        twistFvD = true;
         calibrateInPhase = true;
         return 1;
     }
     else if(command=="calibrateWindow"){
         calibrateWindow = true;
+        webUpdateConstants = true;
         return 1;
     }
     else if(command.substring(0,11)=="generateFvD"){
@@ -1564,6 +1596,14 @@ int WebRunFunction(String command) {
         else return -1;
         generateFvD = true;
         return maxTestLoad_Bar;
+    }
+    else if(command.substring(0,8)=="twistFvD") {
+        command = command.substring(8);
+        int tempLoad = command.toInt();
+        if(tempLoad==tempLoad) calibrateTwistLoad = tempLoad; // check if NaN
+        else return -1;
+        twistFvD = true;
+        return calibrateTwistLoad;
     }
     else if(command.substring(0,12)=="elastomerFvD"){
         command = command.substring(12);
@@ -1618,8 +1658,8 @@ int WebRunFunction(String command) {
     }
     else if(command.substring(0,7)=="webRate"){
         command = command.substring(7);
-        dashboardRefreshRate = command.toInt();
-        return dashboardRefreshRate;
+        webDashboardRefreshRate = command.toInt();
+        return webDashboardRefreshRate;
     }
     else if(command=="testRelays") {
         testRelays = true;
@@ -1670,10 +1710,10 @@ int WebRunFunction(String command) {
         errorMsg = "";
         return 1;
     }
-    else if(command=="disp"){
-        if(disp1) disp1 = 0;
-        else disp1 = 1;
-        return 1;
+    else if(command.substring(0,4)=="disp"){
+        command = command.substring(4);
+        displayMode = command.toInt();
+        return displayMode;
     }
     else if(command=="status"){
       return cycleCount;
@@ -1682,7 +1722,10 @@ int WebRunFunction(String command) {
       return version;
     }
     else if(command=="tps"){
-    TestPressureSensors();
+      TestPressureSensors();
+    }
+    else if(command=="kill"){
+      KillRelays();
     }
     else{
         TestMsg(command);
@@ -1706,10 +1749,11 @@ int WebTestPressure(String pressureStr){
 
 //------------------------------------------------------------------------
 int WebSetForce(String forceStr){
-    forceSetting = forceStr.toFloat();
-    SetForce(forceSetting);
+  forceSetting = forceStr.toFloat();
+  SetForce(forceSetting);
 //    calibrateWindow = true; // re-calibrate after changing force
-    return forceSetting;
+  webUpdateConstants = true;
+  return forceSetting;
 }// WebSetForce
 
 
@@ -1731,8 +1775,6 @@ int WebSetTimeout(String tStr){
 
 
 void TestPressureSensors(){
-
-
   int p1Status = 0;
   int p2Status = 0;
 
