@@ -520,7 +520,7 @@ void InitializeLCD(){
     // Set Contrast
     Serial1.write(ESC);
     Serial1.write(0x52);
-    Serial1.write(40);
+    Serial1.write(50);
     // Set Backlight
     Serial1.write(ESC);
     Serial1.write(0x53);
