@@ -1,7 +1,7 @@
 // Regulator 1/DAC 1 is pull (down), Pressure Sensor 1
 // Regulator 2/DAC 2 is push (up), Pressure Sensor 0
 
-int version = 1262; // version number (month.day.rev)
+int version = 3271; // version number (month.day.rev)
 int testMode = 1; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing right only, 6=elastomer testing both cylinders)
 int cycleCount = 0;
 int cycleTarget = 100000;
@@ -774,15 +774,15 @@ void PrintStatusToLCD(String origMsg){
         msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
         WriteLineToLCD(msg,1);
 
-        msg = "Pll:" + String(measuredPullForce,1);
-        msg += " Ps" + String(PSI1setting,1);
+        msg = "Ps" + String(PSI1setting,1);
         msg += " P" + String(pullPressurePSI,1);
+        msg += " Pll:" + String(measuredPullForce,1);
         msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
         WriteLineToLCD(msg,2);
 
-        msg = "Psh:" + String(measuredPushForce,1);
-        msg += " Ps" + String(PSI2setting,1);
+        msg = "Ps" + String(PSI2setting,1);
         msg += " P" + String(pushPressurePSI,1);
+        msg += " Psh:" + String(measuredPushForce,1);
         msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
         WriteLineToLCD(msg,3);
 
@@ -1785,23 +1785,15 @@ void TestPressureSensors(){
 
   WriteLineToLCD("I2C Check: P1=" + String(p1Status) + " P2=" + String(p2Status),1);
 
-  SetPressure(10,1);
-  SetPressure(10,2);
+  SetPressure(PSI1setting,1);
+  SetPressure(PSI2setting,2);
   PushDown();
-  delay(1000);
+  delay(2000);
   ReadInputPins();
   delay(500);
-  WriteLineToLCD("Pull: ps " + String(pushPressurePSI,1) + " pl " + String(pullPressurePSI,1),2);
-  delay(2000);
+  WriteLineToLCD("F"+String(forceSetting,1)+" pl " + String(pullPressurePSI,2),2);
+  delay(stateTimeout[0]);
+//  WriteLineToLCD("F"+String(forceSetting,1)+" ps " + String(pushPressurePSI,1) + " pl " + String(pullPressurePSI,2),2);
   KillRelays();
 
-  SetPressure(12,1);
-  SetPressure(12,2);
-  PushUp();
-  delay(1000);
-  ReadInputPins();
-  delay(500);
-  WriteLineToLCD("Push: ps " + String(pushPressurePSI,1) + " pl " + String(pullPressurePSI,1),3);
-  delay(2000);
-  KillRelays();
 }
