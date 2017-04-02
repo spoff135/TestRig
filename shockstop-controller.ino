@@ -1,7 +1,7 @@
 // Regulator 1/DAC 1 is pull (down), Pressure Sensor 1
 // Regulator 2/DAC 2 is push (up), Pressure Sensor 0
 
-int version = 3271; // version number (month.day.rev)
+String version = "4.2.1"; // version number (month.day.rev)
 int testMode = 1; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing right only, 6=elastomer testing both cylinders)
 int cycleCount = 0;
 int cycleTarget = 100000;
@@ -18,10 +18,10 @@ float mode7Ratio = 0.2; // ratio of downforce to upforce in up-only (mode 7) tes
 
 //UBIDOTS CODE
 #include "HttpClient.h"  // if using webIDE, use this: #include "HttpClient/HttpClient.h"
-#define WEB_DEFLECTION_AVG "56b671fb76254228866ee416"
 #define WEB_DEFLECTION "56cc63b6762542644cc8d2ef"
+#define WEB_DEFLECTION_AVG "56b671fb76254228866ee416"
+#define WEB_DEFLECTION_LIMIT "57acfcf47625425735b8b407"
 #define WEB_CYCLES "56b672cb7625422dd8dbbf52"
-#define WEB_COMPRESSOR_STATE "56cc62f37625425f3cd6aeb2"
 #define WEB_FORCE_DOWN "56cc62a27625425dba666c80"
 #define WEB_FORCE_UP "56cc666d7625427368e80d6e"
 #define WEB_FORCE_INPUT "56cc62db7625425f3cd6ae79"
@@ -29,7 +29,7 @@ float mode7Ratio = 0.2; // ratio of downforce to upforce in up-only (mode 7) tes
 #define WEB_POSITION_LEFT "57923c937625423072003ec0"
 #define WEB_POSITION_UP "57923cfe76254237a3daea81"
 #define WEB_POSITION_DOWN "57923d0476254237cebbf5c3"
-#define WEB_DEFLECTION_LIMIT "57acfcf47625425735b8b407"
+#define WEB_TEST_STATUS "56cc62f37625425f3cd6aeb2"
 
 HttpClient http;
 // Headers currently need to be set at init, useful for API keys etc.
@@ -112,6 +112,7 @@ long compressorOnTime = 0; // # of ms compressor was on
 long compressorOffTime = 0; // # of ms compressor was off
 long stateStartTime = 0; // start time (ms) of current state
 long stateTime = 0; // elapsed time (ms) in current state
+long period = 0; // total time to go through an entire cycle
     // outputs state flags/variables
 bool paused = true;
 bool statusUpdate = true;
@@ -125,7 +126,9 @@ int DAC2_bits = 0; // current setting of DAC2
 float PSI1setting = 0; // current setting of DAC1 in PSI
 float PSI2setting = 0; // current setting of DAC2 in PSI
 float forceSetting = 1; // current force setting
-String errorMsg = "";
+String errorMsg = "None";
+String statusMsg = "Boot up";
+String compressorMsg = "Not set";
     // Measured state flags/variables
 bool dataLoggerStatus = false;
 bool pressureSensorStatus = false;
@@ -226,6 +229,8 @@ void loop()
     ReadInputPins();
     RunCalibrations();// runs functions enabled through webhooks
 
+    if(webUpdateFlag) UpdateDashboard();
+
     bool stateChange = false;
     currentState = 1; // start in state 1.
     SetState(currentState);
@@ -285,11 +290,10 @@ void loop()
         paused = true;
         errorFlag = true;
         errorCountConsecutive = 0;
+        statusMsg = "Error";
     }
 
     PrintStatusToLCD("Run");
-
-    if(webUpdateFlag) UpdateDashboard();
 
     if(paused){
         PauseAll();
@@ -576,12 +580,14 @@ void ReadInputPins(){
     if(tankPressurePSI < tankMin && !compressorOn){
         digitalWrite(compressorRelayPin,HIGH);
         compressorOn = true;
+        compressorMsg = "On";
         compressorStartTime = millis();
         compressorOffTime = compressorStopTime - compressorStartTime;
     }
     else if(tankPressurePSI > tankMax && compressorOn){
         digitalWrite(compressorRelayPin,LOW);
         compressorOn = false;
+        compressorMsg = "Off";
         compressorStopTime = millis();
         compressorOnTime = compressorStartTime - compressorStopTime;
         compressorDutyCycle = 0.7 * (compressorOnTime) / (compressorOnTime + compressorOffTime) + 0.3 * compressorDutyCycle;
@@ -595,7 +601,7 @@ void ReadInputPins(){
     rightDucerPosInch = rightDucerPosBits * 0.00096118; // based on 100mm ducer/4096 bits = .00096118"/bit
 
     // update timeLeft
-    timeLeft =  ( (cycleTarget-cycleCount) * (stateTimeout[currentState]+stateTimeout[currentState])/2.0 * nStates ) / 60000.0;
+    timeLeft =  ( (cycleTarget-cycleCount) * period) / 60000.0;
 }// ReadInputPins
 
 
@@ -717,7 +723,7 @@ void PrintStatusToLCD(String origMsg){
         if(displayMode==0){
             ClearLCD();
 
-            msg = "Ver:" + String(version) + " E"+ String(errorCountConsecutive) + " M" + String(testMode);
+            msg = "Ver:" + version + " E"+ String(errorCountConsecutive) + " M" + String(testMode);
             msg += "                "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
             WriteLineToLCD(msg,1);
 
@@ -769,7 +775,7 @@ void PrintStatusToLCD(String origMsg){
         else if(displayMode==2){
 //USE THIS FOR DIAGNOSING PRESSURE GAUGE READINGS
         msg = origMsg;
-        msg += "Ver:" + String(version);
+        msg += "Ver:" + version;
         msg += " Fs:" + String(forceSetting,0);
         msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
         WriteLineToLCD(msg,1);
@@ -806,7 +812,7 @@ void PrintStatusToLCD(String origMsg){
         msg = "                  "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
         WriteLineToLCD(msg,3);
 
-        msg += "Ver:" + String(version);
+        msg += "Ver:" + version;
         msg += " Fs:" + String(forceSetting,0);
         msg += "         "; // spaces added at the end of each line (so I don't have to run ClearLCD and make the screen flash)
         WriteLineToLCD(msg,4);
@@ -843,14 +849,37 @@ int PrintMsg(String msg){
 void UpdateDashboard(){
 
     if(millis()-lastDashboardUpdate > webDashboardRefreshRate){
+
+      //build common messages
+      String StatusPostString = "";
+      StatusPostString = "{\"variable\":\""WEB_TEST_STATUS"\", \"value\": "+String(!paused);
+        StatusPostString += ", \"context\":{";
+          StatusPostString += "\"status\": \""+statusMsg+"\", ";
+          StatusPostString += "\"mode\": \""+String(testMode)+"\", ";
+          StatusPostString += "\"compstat\": \""+compressorMsg+"\", ";
+          StatusPostString += "\"errormsg\": \""+errorMsg+"\", ";
+          StatusPostString += "\"version\": \""+version+"\"";
+          StatusPostString += " }";
+        StatusPostString += "}";
+      String CyclesPostString = "";
+      CyclesPostString = "{\"variable\":\""WEB_CYCLES"\", \"value\": "+String(cycleCount);
+        CyclesPostString += ", \"context\":{";
+          CyclesPostString += "\"target\": \""+String(cycleTarget)+"\", ";
+          CyclesPostString += "\"ecount\": \""+String(errorLog)+"\", ";
+          CyclesPostString += "\"timeout\": \""+String(stateTimeout[0])+"\", ";
+          CyclesPostString += "\"period\": \""+String(period)+"\", ";
+          CyclesPostString += "\"window\": \""+String((windowExcursionLimit-1)*100,0)+"\"";
+          CyclesPostString += " }";
+        CyclesPostString += "}";
+
       if(!paused){
         request.body = "[";
-        request.body += "{\"variable\":\""WEB_CYCLES"\", \"value\": "+String(cycleCount)+" }";
+        request.body += StatusPostString;
+        request.body += ", "+CyclesPostString;
         request.body += ", { \"variable\":\""WEB_DEFLECTION"\", \"value\": "+String(deflection,3)+" }";
         request.body += ", { \"variable\":\""WEB_DEFLECTION_AVG"\", \"value\": "+String(deflectionAvg,3)+" }";
         request.body += ", { \"variable\":\""WEB_FORCE_UP"\", \"value\": "+String(state1Force,1)+" }";
         request.body += ", { \"variable\":\""WEB_FORCE_DOWN"\", \"value\": "+String(state2Force,1)+" }";
-        request.body += ", { \"variable\":\""WEB_COMPRESSOR_STATE"\", \"value\": "+String(compressorOn)+" }";
         request.body += ", { \"variable\":\""WEB_POSITION_UP"\", \"value\": "+String(positionAvg[1])+" }";
         request.body += ", { \"variable\":\""WEB_POSITION_DOWN"\", \"value\": "+String(positionAvg[2])+" }";
         if(webUpdateConstants || millis()-lastWebConstantsUpdate > webUpdateConstantsRate) {
@@ -864,8 +893,8 @@ void UpdateDashboard(){
       }
       else {
         request.body = "[";
-        request.body += "{\"variable\":\""WEB_CYCLES"\", \"value\": "+String(cycleCount)+" }";
-        request.body += ", { \"variable\":\""WEB_COMPRESSOR_STATE"\", \"value\": "+String(compressorOn)+" }";
+        request.body += StatusPostString;
+        request.body += ", "+CyclesPostString;
         request.body += "]";
         request.path = "/api/v1.6/collections/values/";
         http.post(request, response, headers);
@@ -1202,7 +1231,6 @@ void GenerateElastomerFvD(){
               request.body = "[";
               request.body += "{ \"variable\":\""WEB_FORCE_DOWN"\", \"value\": "+String(tempMF,3)+" }";
               request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": "+String(tempFS)+" }";
-              request.body += ", { \"variable\":\""WEB_COMPRESSOR_STATE"\", \"value\": "+String(compressorOn)+" }";
               request.body += ", { \"variable\":\""WEB_FORCE_UP"\", \"value\": "+String(tempPR,3)+" }";//TBD- need to add position_right to the list
               request.body += "]";
               request.path = "/api/v1.6/collections/values/";
@@ -1517,6 +1545,7 @@ void PauseAll(){
 
     // wait for error flag to be reset
     while(errorFlag){
+        statusMsg = "Error";
         ReadInputPins();
         PrintStatusToLCD(errorMsg);
         if(webUpdateFlag) UpdateDashboard();
@@ -1525,6 +1554,7 @@ void PauseAll(){
 
     // wait for pause button to be toggled off
     while(paused){
+        statusMsg = "Paused";
         ReadInputPins();
         PrintStatusToLCD("Paused");
         if(webUpdateFlag) UpdateDashboard();
@@ -1632,8 +1662,14 @@ int WebRunFunction(String command) {
         return 1;
     }
     else if(command=="pause"){
-        if(paused) paused = false;
-        else paused = true;
+        if(paused){
+          paused = false;
+          statusMsg = "Running";
+        }
+        else {
+          paused = true;
+          statusMsg = "Paused";
+        }
         return paused;
     }
     else if(command=="I2C"){
@@ -1707,7 +1743,7 @@ int WebRunFunction(String command) {
     }
     else if(command=="resetError"){
         errorFlag = false;
-        errorMsg = "";
+        errorMsg = "None";
         return 1;
     }
     else if(command.substring(0,4)=="disp"){
@@ -1717,9 +1753,6 @@ int WebRunFunction(String command) {
     }
     else if(command=="status"){
       return cycleCount;
-    }
-    else if(command=="version"){
-      return version;
     }
     else if(command=="tps"){
       TestPressureSensors();
@@ -1758,19 +1791,20 @@ int WebSetForce(String forceStr){
 
 
 //------------------------------------------------------------------------
-int WebSetTimeout(String tStr){
+long WebSetTimeout(String tStr){
 
     // if 1st char is a "*", only update state 1 (up direction)
     if(tStr.substring(0,1)=="*"){
         stateTimeout[1] = tStr.substring(1).toInt();
-        return stateTimeout[1];
     }
     else{
         stateTimeout[0] = tStr.toInt();
         stateTimeout[1] = tStr.toInt();
         stateTimeout[2] = tStr.toInt();
-        return stateTimeout[0];
     }
+
+    period = stateTimeout[1]+stateTimeout[2];
+    return period;
 }// WebSetTimeout
 
 
