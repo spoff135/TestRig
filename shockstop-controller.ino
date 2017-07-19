@@ -1,13 +1,11 @@
 // Regulator 1/DAC 1 is pull (down), Pressure Sensor 1
 // Regulator 2/DAC 2 is push (up), Pressure Sensor 0
 
-String version = "6.15.3"; // version number (month.day.rev)
-int testMode = 0; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing right only, 6=elastomer testing both cylinders, 7=ShockStop Up-only ISO, 8=Seatpost ISO Test (right only))
-int cycleCount = 1700;
+String version = "7.14.3"; // version number (month.day.rev)
+int testMode = 0; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing right only, 6=elastomer testing both cylinders, 7=ShockStop Up-only ISO, 8=Seatpost ISO Test (right only), 9=Aerobars Extension Up/Down)
+int cycleCount = 0;
 int cycleTarget = 100000;
 int stateTimeout[3] = {2000,2000,2000}; // time (ms) before automatic state change
-int minStateTime = 200; // minimum amount of time before test fixture looks to see if state has reached desired pressure
-int measuredForceBuffer = 5;
 float zeroPressureThreshold = 0.25; // (psi) threshold whereby the software determines that a cylinder has reached zero psi.
 float windowExcursionLimit = 1.15;
 bool webUpdateFlag = true;
@@ -63,10 +61,22 @@ int leftDucerPin = A2; //analog pin associated with the left transducer
 int rightDucerPin = A1; //analog pin associated with the right transducer
 
 // Define system hardware constants
+
+// ShockStop L/R Cylinders
 //float pullArea = 2.8348; // mcm part 6498K477
 //float pushArea = 3.1416; // mcm part 6498K477
+//float ducerInchesPerBit = 0.00096118; // based on 100mm ducer/4096 bits = .00096118"/bit
+
+// Seatpost Cylinder & ducer
 float pullArea = 4.6019; // mcm part 6498K488 / 6498K491
 float pushArea = 4.9087; // mcm part 6498K488 / 6498K491
+float ducerInchesPerBit = 0.00144177 // based on 150mm ducer/4096 bits = .00096118"/bit
+
+// Aerobars Extension Cylinder
+//float pullArea = 0.552; // bimba
+//float pushArea = 0.601; // bimba
+//float ducerInchesPerBit = tbd? 0.00144177 // based on 150mm ducer/4096 bits = .00096118"/bit
+
 int minPSI = 3; // regulator min pressure
 int maxPSI = 120; // regulator max pressure
 int maxResolution = 4095;
@@ -88,8 +98,8 @@ int countsMin = 1638; //bits
 int sensorMax = 150; //psi
 int sensorMin = 0; //psi
     // Compressor limits
-int tankMin = 90; // tank pressure at which the compressor turns on
-int tankMax = 120; // tank pressure at which the compressor turns off
+int tankMin = 65; // tank pressure at which the compressor turns on
+int tankMax = 90; // tank pressure at which the compressor turns off
     // Define LCD Constants
 char ESC = 0xFE;
 
@@ -120,7 +130,6 @@ bool paused = true;
 bool statusUpdate = true;
 bool webUpdateConstants = true; // used to send data web dashboard that doesn't change often
 bool useI2C = true;
-bool usePressureGauge = false;
 bool compressorOn = false;
 int currentState = 0;  // current state (0=null,1 & 2 are mode-dependent)
 int DAC1_bits = 0; // current setting of DAC1
@@ -262,7 +271,7 @@ void loop()
       PrintStatusToLCD("Run");
     }
 
-    if(testMode>0){
+    if(testMode>0 && testMode!=9){ // no error checking for tests without linear transducers
       // Update deflection total and average and check against window
       deflection = CalculateDeflection();
       deflectionAvg = 0.9*deflectionAvg + 0.1*deflection;
@@ -271,7 +280,7 @@ void loop()
         errorMsg = "Total defl error";
       }
       for(int i=1; i<=nStates; i++){
-        if(testMode!=8){ //Don't check left side for 1-cylinder test modes TBD Update w/other modes
+        if(testMode!=5 && testMode!=8 && testMode!=9){ //Don't check left side for 1-cylinder test modes TBD Update w/other modes
           if(abs(positionLeft[i]-refPositionLeft[i]) > refPositionLeftWindow[i]){
             errorFlag = true;
             errorMsg = "Error: LeftPos, S" + String(i);
@@ -319,10 +328,9 @@ bool CheckStateConditions(int currentState){
       break;
     case 1:
       if(stateTime > stateTimeout[currentState]) stateChange = true;
-      if(usePressureGauge && stateTime > minStateTime && measuredPushForce > (forceSetting + measuredForceBuffer) ) stateChange = true;
       if(stateChange){
-        // For ShockStop ISO test modes, adjust PUSH pressure settings
-        if(testMode==1 || testMode==2 || testMode==7){
+        // For most ISO test modes, adjust PUSH pressure settings
+        if(testMode==1 || testMode==2 || testMode==7 || testMode==9){
           state1Force = measuredPushForce;
           if(state1Force < forceSetting){
             PSI2setting+=0.1;
@@ -350,7 +358,7 @@ bool CheckStateConditions(int currentState){
     case 2:
       if(stateTime > stateTimeout[currentState]){
         stateChange = true;
-        if(testMode==8){// if running seatpost test, adjust state timeout in the off position until cylinder is reaching < 1 psi
+        if(testMode==8){// for the seatpost test, this adjusts the state timeout in the off position until cylinder is reaching < 1 psi
           if(pullPressurePSI > zeroPressureThreshold){
             stateTimeout[currentState]=stateTimeout[currentState]+10;
           }
@@ -360,10 +368,9 @@ bool CheckStateConditions(int currentState){
           period = stateTimeout[1]+stateTimeout[2];
         }
       }
-      if(usePressureGauge && stateTime > minStateTime && measuredPullForce > (forceSetting + measuredForceBuffer) ) stateChange = true;
       if(stateChange){
-      // For ShockStop ISO test modes, adjust PULL pressure settings
-        if(testMode==1 || testMode==2 || testMode==3 || testMode==7){
+        // For most ISO test modes, adjust PULL pressure settings
+        if(testMode==1 || testMode==2 || testMode==3 || testMode==7 || testMode==9){
           state2Force = measuredPullForce;
           if(testMode==7) state2Force = state2Force/mode7Ratio; // for up-only test, scale up reading to match up force
           if(state2Force < forceSetting){
@@ -487,6 +494,17 @@ void SetState(int currentState){
         break;
       }
     }
+    else if(testMode==9){ // Aerobars Extension Up/Down (use right cylinder)
+      switch (currentState) {
+      case 1:
+        RightUp();
+        break;
+      case 2:
+        RightDown();
+        cycleCount++;
+        break;
+      }
+    }
     else {
       KillRelays();
     }
@@ -540,6 +558,10 @@ void SetMode(int testMode){
       testMode = 8;
       nStates = 2;
       break;
+    case 9: // Aerobars Extension Up/Down
+      testMode = 9;
+      nStates = 2;
+      break;
     default:
       testMode = 0;
       nStates = 0;
@@ -562,7 +584,7 @@ float CalculateDeflection(){
     if(rightDef < 0) rightDef = rightDef*-1;
 
     float totalDef = 0;
-    if(testMode==8){// for seatpost ISO test, just return right deflection
+    if(testMode==5 || testMode==8 || testMode==9){// for seatpost ISO test, just return right deflection
        totalDef = rightDef;
     }
     else{
@@ -657,8 +679,8 @@ void ReadInputPins(){
 
 //    leftDucerPosInch = leftDucerPosBits * 0.00096118; // based on 100mm ducer/4096 bits = .00096118"/bit
 //    rightDucerPosInch = rightDucerPosBits * 0.00096118; // based on 100mm ducer/4096 bits = .00096118"/bit
-    leftDucerPosInch = leftDucerPosBits * 0.00144177; // based on 150mm ducer/4096 bits = .00096118"/bit
-    rightDucerPosInch = rightDucerPosBits * 0.00144177; // based on 150mm ducer/4096 bits = .00096118"/bit
+    leftDucerPosInch = leftDucerPosBits * ducerInchesPerBit; 0.00144177; // based on 150mm ducer/4096 bits = 0.00144177"/bit
+    rightDucerPosInch = rightDucerPosBits * ducerInchesPerBit; 0.00144177; // based on 150mm ducer/4096 bits = 0.00144177"/bit
 
     // update timeLeft
     timeLeft =  ( (cycleTarget-cycleCount) * period) / 60000.0;
@@ -710,6 +732,9 @@ void RunCalibrations(){
     if(testRelay){
         digitalWrite(testRelayPin,HIGH);
         delay(stateTimeout[0]);
+        ReadInputPins();
+        delay(150);
+        PrintDiagnostic("testRelay");
         digitalWrite(testRelayPin,LOW);
         testRelay = false;
     }
@@ -1352,6 +1377,19 @@ void GenerateSeatpostFvD(){
           forceSetting = i;
           SetForce(i);
 
+//TBD FIXME DELETEME change back to RightDOwn for seatpostFvD
+          RightUp();
+          delay(1000+i*5);//multiplier is because bigger loads take more time
+          ReadInputPins();
+          // record these values now (fixes bug related to ubidots output being overwritten by a later call to ReadInputPins)
+          float tempMF = measuredPushForce;
+          float tempFS = forceSetting;
+          float tempPR = rightDucerPosInch;
+
+          PrintDiagnostic("FvD "+ String(i));
+          PrintStatusToLCD("FvD "+ String(i));
+
+          /*
           RightDown();
           delay(1000+i*5);//multiplier is because bigger loads take more time
           ReadInputPins();
@@ -1362,6 +1400,7 @@ void GenerateSeatpostFvD(){
 
           PrintDiagnostic("FvD "+ String(i));
           PrintStatusToLCD("FvD "+ String(i));
+          */
 
           KillAll();
           delay(1000+i*5);
@@ -1369,7 +1408,7 @@ void GenerateSeatpostFvD(){
           if(webUpdateFlag){
               //send update to Ubidots
               request.body = "[";
-              request.body += "{ \"variable\":\""WEB_FORCE_DOWN"\", \"value\": "+String(tempMF,3)+" }";
+              request.body += "{ \"variable\":\""WEB_FORCE_UP"\", \"value\": "+String(tempMF,3)+" }"; //TBD FIXME DELETEME change back to FORCE_DOWN for seatpostFvD
               request.body += ", { \"variable\":\""WEB_POSITION_RIGHT"\", \"value\": "+String(rightDucerPosInch,3)+" }";
               request.body += "]";
               request.path = "/api/v1.6/collections/values/";
@@ -1831,11 +1870,6 @@ int WebRunFunction(String command) {
         else useI2C = true;
         return useI2C;
     }
-    else if(command=="pressureGauge"){
-        if(usePressureGauge) usePressureGauge = false;
-        else usePressureGauge = true;
-        return usePressureGauge;
-    }
     else if(command=="errorChecking"){
         if(errorChecking) errorChecking = false;
         else errorChecking = true;
@@ -1889,11 +1923,6 @@ int WebRunFunction(String command) {
         command = command.substring(4);
         testNumber = command.toInt();
         return testNumber;
-    }
-    else if(command.substring(0,6)=="buffer"){
-        command = command.substring(6);
-        measuredForceBuffer = command.toInt();
-        return measuredForceBuffer;
     }
     else if(command.substring(0,7)=="zeroPSI") {
         command = command.substring(7);
