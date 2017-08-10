@@ -1,13 +1,13 @@
 // Regulator 1/DAC 1 is pull (down), Pressure Sensor 1
 // Regulator 2/DAC 2 is push (up), Pressure Sensor 0
 
-String version = "7.14.3"; // version number (month.day.rev)
+String version = "7.26.0"; // version number (month.day.rev)
 int testMode = 0; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing right only, 6=elastomer testing both cylinders, 7=ShockStop Up-only ISO, 8=Seatpost ISO Test (right only), 9=Aerobars Extension Up/Down)
 int cycleCount = 0;
 int cycleTarget = 100000;
 int stateTimeout[3] = {2000,2000,2000}; // time (ms) before automatic state change
 float zeroPressureThreshold = 0.25; // (psi) threshold whereby the software determines that a cylinder has reached zero psi.
-float windowExcursionLimit = 1.15;
+float windowExcursionLimit = 1.15; // % excursion allowed from defined calibration window (1.15 = 15% window)
 bool webUpdateFlag = true;
 bool errorChecking = true;
 int webDashboardRefreshRate = 5000; // web dashboard refresh rate (ms)
@@ -29,6 +29,12 @@ float mode7Ratio = 0.2; // ratio of downforce to upforce in up-only (mode 7) tes
 #define WEB_POSITION_UP "57923cfe76254237a3daea81"
 #define WEB_POSITION_DOWN "57923d0476254237cebbf5c3"
 #define WEB_TEST_STATUS "56cc62f37625425f3cd6aeb2"
+#define WEB_PUSH_SETTING "59775e05c03f9769a7500695"
+#define WEB_PULL_SETTING "59775e0cc03f9769d9387961"
+#define WEB_S1_TIMEOUT "5977638cc03f976e9d662cb7"
+#define WEB_S2_TIMEOUT "59776393c03f976efe84e3fd"
+#define WEB_PERIOD "5979db17c03f973987af9917"
+#define WEB_CYCLE_TARGET "5979db98c03f973acdd79192"
 
 HttpClient http;
 // Headers currently need to be set at init, useful for API keys etc.
@@ -63,14 +69,14 @@ int rightDucerPin = A1; //analog pin associated with the right transducer
 // Define system hardware constants
 
 // ShockStop L/R Cylinders
-//float pullArea = 2.8348; // mcm part 6498K477
-//float pushArea = 3.1416; // mcm part 6498K477
-//float ducerInchesPerBit = 0.00096118; // based on 100mm ducer/4096 bits = .00096118"/bit
+float pullArea = 2.8348; // mcm part 6498K477
+float pushArea = 3.1416; // mcm part 6498K477
+float ducerInchesPerBit = 0.00096118; // based on 100mm ducer/4096 bits = .00096118"/bit
 
 // Seatpost Cylinder & ducer
-float pullArea = 4.6019; // mcm part 6498K488 / 6498K491
-float pushArea = 4.9087; // mcm part 6498K488 / 6498K491
-float ducerInchesPerBit = 0.00144177 // based on 150mm ducer/4096 bits = .00096118"/bit
+//float pullArea = 4.6019; // mcm part 6498K488 / 6498K491
+//float pushArea = 4.9087; // mcm part 6498K488 / 6498K491
+//float ducerInchesPerBit = 0.00144177; // based on 150mm ducer/4096 bits = .00096118"/bit
 
 // Aerobars Extension Cylinder
 //float pullArea = 0.552; // bimba
@@ -98,8 +104,8 @@ int countsMin = 1638; //bits
 int sensorMax = 150; //psi
 int sensorMin = 0; //psi
     // Compressor limits
-int tankMin = 65; // tank pressure at which the compressor turns on
-int tankMax = 90; // tank pressure at which the compressor turns off
+int tankMin = 75; // tank pressure at which the compressor turns on
+int tankMax = 95; // tank pressure at which the compressor turns off
     // Define LCD Constants
 char ESC = 0xFE;
 
@@ -173,6 +179,8 @@ float refDeflection; // Total deflection measured during most recent calibration
 float deflectionMax; // Total deflection limit
 float lastNeutralLeft; // Most recent recorded neutral position
 float lastNeutralRight; // Most recent recorded neutral position
+float pullZero; // Most recent pressure reading while it's supposed to be zero psi
+float pushZero; // Most recent pressure reading while it's supposed to be zero psi
 
 // Flags for performing functions
 bool testRelay = false;
@@ -271,45 +279,31 @@ void loop()
       PrintStatusToLCD("Run");
     }
 
-    if(testMode>0 && testMode!=9){ // no error checking for tests without linear transducers
-      // Update deflection total and average and check against window
-      deflection = CalculateDeflection();
-      deflectionAvg = 0.9*deflectionAvg + 0.1*deflection;
-      if(deflection > deflectionMax){
-        errorFlag = true;
-        errorMsg = "Total defl error";
-      }
-      for(int i=1; i<=nStates; i++){
-        if(testMode!=5 && testMode!=8 && testMode!=9){ //Don't check left side for 1-cylinder test modes TBD Update w/other modes
-          if(abs(positionLeft[i]-refPositionLeft[i]) > refPositionLeftWindow[i]){
-            errorFlag = true;
-            errorMsg = "Error: LeftPos, S" + String(i);
-          }
-        }
-        if(abs(positionRight[i]-refPositionRight[i]) > refPositionRightWindow[i]){
-          errorFlag = true;
-          errorMsg = "Error: RightPos, S" + String(i);
-        }
-      }
+    // Update deflection total and average
+    deflection = CalculateDeflection();
+    deflectionAvg = 0.9*deflectionAvg + 0.1*deflection;
 
-      // This allows only one error to count per cycle
-      if(errorFlag){
-          errorCountConsecutive++;
-          errorLog++;
-          errorFlag = false;
-      }
-      else errorCountConsecutive = 0;
+    CheckForErrors();
 
-      // Only error out if there have been 2 consecutive errors
-      if(errorCountConsecutive > 1 && errorChecking){
-          paused = true;
-          errorFlag = true;
-          errorCountConsecutive = 0;
-          statusMsg = "Error";
-      }
-
-      PrintStatusToLCD("Run");
+    // Only count one error per cycle
+    if(errorFlag){
+        errorCountConsecutive++;
+        errorLog++;
+        errorFlag = false;
     }
+    else errorCountConsecutive = 0;
+
+    // Only error out if there have been 2 consecutive errors
+    if(errorCountConsecutive > 1 && errorChecking){
+        paused = true;
+        errorFlag = true;
+        errorCountConsecutive = 0;
+        statusMsg = "Error";
+    }
+
+
+// TBD why was this inside the error loop?
+//    PrintStatusToLCD("Run");
 
     if(paused){
         PauseAll();
@@ -319,80 +313,135 @@ void loop()
 
 
 //------------------------------------------------------------------------
-bool CheckStateConditions(int currentState){
-    bool stateChange = false;
+void CheckForErrors(){
 
-    switch (currentState) {
-    case 0:
-      stateChange = true;
-      break;
-    case 1:
-      if(stateTime > stateTimeout[currentState]) stateChange = true;
-      if(stateChange){
-        // For most ISO test modes, adjust PUSH pressure settings
-        if(testMode==1 || testMode==2 || testMode==7 || testMode==9){
-          state1Force = measuredPushForce;
-          if(state1Force < forceSetting){
-            PSI2setting+=0.1;
-            SetPressure(PSI2setting,2);
-          }
-          else if(state1Force > forceSetting){
-            PSI2setting-=0.1;
-            SetPressure(PSI2setting,2);
-          }
-        }
-        // For Seatpost ISO test mode, adjust PULL pressure settings
-        else if(testMode==8){
-          state1Force = measuredPullForce;
-          if(state1Force < forceSetting){
-            PSI1setting+=0.1;
-            SetPressure(PSI1setting,1);
-          }
-          else if(state1Force > forceSetting){
-            PSI1setting-=0.1;
-            SetPressure(PSI1setting,1);
-          }
-        }
-      }
-      break;
-    case 2:
-      if(stateTime > stateTimeout[currentState]){
-        stateChange = true;
-        if(testMode==8){// for the seatpost test, this adjusts the state timeout in the off position until cylinder is reaching < 1 psi
-          if(pullPressurePSI > zeroPressureThreshold){
-            stateTimeout[currentState]=stateTimeout[currentState]+10;
-          }
-          else{
-            stateTimeout[currentState]=stateTimeout[currentState]-10;
-          }
-          period = stateTimeout[1]+stateTimeout[2];
-        }
-      }
-      if(stateChange){
-        // For most ISO test modes, adjust PULL pressure settings
-        if(testMode==1 || testMode==2 || testMode==3 || testMode==7 || testMode==9){
-          state2Force = measuredPullForce;
-          if(testMode==7) state2Force = state2Force/mode7Ratio; // for up-only test, scale up reading to match up force
-          if(state2Force < forceSetting){
-            PSI1setting+=0.1;
-            SetPressure(PSI1setting,1);
-          }
-          else if(state2Force > forceSetting){
-            PSI1setting-=0.1;
-            SetPressure(PSI1setting,1);
-          }
-        }
-      }
-      break;
-    case 3:
-      if(stateTime > stateTimeout[currentState]) stateChange = true;
-      break;
-    case 4:
-      if(stateTime > stateTimeout[currentState]) stateChange = true;
-      break;
+  if(testMode>0 && testMode!=9){ // no position error checking for tests without linear transducers
+
+    // check positions/deflections against against window
+    if(deflection > deflectionMax){
+      errorFlag = true;
+      errorMsg = "Total defl error";
     }
+    for(int i=1; i<=nStates; i++){
+      if(testMode!=5 && testMode!=8 && testMode!=9){ //Don't check left side for 1-cylinder test modes TBD Update w/other modes
+        if(abs(positionLeft[i]-refPositionLeft[i]) > refPositionLeftWindow[i]){
+          errorFlag = true;
+          errorMsg = "Error: LeftPos, S" + String(i);
+        }
+      }
+      if(abs(positionRight[i]-refPositionRight[i]) > refPositionRightWindow[i]){
+        errorFlag = true;
+        errorMsg = "Error: RightPos, S" + String(i);
+      }
+    }
+  }
 
-    return stateChange;
+  // Check that supply pressure is higher than the needed pressure
+  if(tankPressurePSI < PSI2setting || tankPressurePSI < PSI1setting ){
+    errorFlag = true;
+    errorMsg = "Error: Supply Pressure Low";
+  }
+}
+// CheckForErrors
+
+//------------------------------------------------------------------------
+bool CheckStateConditions(int currentState){
+  bool stateChange = false;
+
+  switch (currentState) {
+  case 0:
+    stateChange = true;
+    break;
+  case 1:
+    if(stateTime > stateTimeout[currentState]) stateChange = true;
+    if(stateChange){
+/*      if(testMode==2){// TBD: For the ShockStop Out of Phase test, this adjusts the state timeout in the off position until cylinder is reaching < 1 psi
+        pullZero = pullPressurePSI;
+        if(pullPressurePSI > zeroPressureThreshold){
+          stateTimeout[currentState]=stateTimeout[currentState]+10;
+        }
+        else{
+          stateTimeout[currentState]=stateTimeout[currentState]-10;
+        }
+        period = stateTimeout[1]+stateTimeout[2];
+      }
+*/
+
+      // For most ISO test modes, adjust PUSH pressure settings
+      if(testMode==1 || testMode==2 || testMode==7 || testMode==9){
+        state1Force = measuredPushForce;
+        if(state1Force < forceSetting){
+          PSI2setting+=0.1;
+          SetPressure(PSI2setting,2);
+        }
+        else if(state1Force > forceSetting){
+          PSI2setting-=0.1;
+          SetPressure(PSI2setting,2);
+        }
+      }
+      // For Seatpost ISO test mode, adjust PULL pressure settings
+      else if(testMode==8){
+        state1Force = measuredPullForce;
+        if(state1Force < forceSetting){
+          PSI1setting+=0.1;
+          SetPressure(PSI1setting,1);
+        }
+        else if(state1Force > forceSetting){
+          PSI1setting-=0.1;
+          SetPressure(PSI1setting,1);
+        }
+      }
+    }
+    break;
+  case 2:
+    if(stateTime > stateTimeout[currentState]){
+      stateChange = true;
+/*      if(testMode==2){// TBD: For the ShockStop Out of Phase test, this adjusts the state timeout in the off position until cylinder is reaching < 1 psi
+        pushZero = pushPressurePSI;
+        if(pushPressurePSI > zeroPressureThreshold){
+          stateTimeout[currentState]=stateTimeout[currentState]+10;
+        }
+        else{
+          stateTimeout[currentState]=stateTimeout[currentState]-10;
+        }
+        period = stateTimeout[1]+stateTimeout[2];
+      }
+*/
+      if(testMode==8){// for the seatpost test, this adjusts the state timeout in the off position until cylinder is reaching < 1 psi
+        if(pullPressurePSI > zeroPressureThreshold){
+          stateTimeout[currentState]=stateTimeout[currentState]+10;
+        }
+        else{
+          stateTimeout[currentState]=stateTimeout[currentState]-10;
+        }
+        period = stateTimeout[1]+stateTimeout[2];
+      }
+    }
+    if(stateChange){
+      // For most ISO test modes, adjust PULL pressure settings
+      if(testMode==1 || testMode==2 || testMode==3 || testMode==7 || testMode==9){
+        state2Force = measuredPullForce;
+        if(testMode==7) state2Force = state2Force/mode7Ratio; // for up-only test, scale up reading to match up force
+        if(state2Force < forceSetting){
+          PSI1setting+=0.1;
+          SetPressure(PSI1setting,1);
+        }
+        else if(state2Force > forceSetting){
+          PSI1setting-=0.1;
+          SetPressure(PSI1setting,1);
+        }
+      }
+    }
+    break;
+  case 3:
+    if(stateTime > stateTimeout[currentState]) stateChange = true;
+    break;
+  case 4:
+    if(stateTime > stateTimeout[currentState]) stateChange = true;
+    break;
+  }
+
+  return stateChange;
 }// CheckStateConditions
 
 
@@ -679,8 +728,8 @@ void ReadInputPins(){
 
 //    leftDucerPosInch = leftDucerPosBits * 0.00096118; // based on 100mm ducer/4096 bits = .00096118"/bit
 //    rightDucerPosInch = rightDucerPosBits * 0.00096118; // based on 100mm ducer/4096 bits = .00096118"/bit
-    leftDucerPosInch = leftDucerPosBits * ducerInchesPerBit; 0.00144177; // based on 150mm ducer/4096 bits = 0.00144177"/bit
-    rightDucerPosInch = rightDucerPosBits * ducerInchesPerBit; 0.00144177; // based on 150mm ducer/4096 bits = 0.00144177"/bit
+    leftDucerPosInch = leftDucerPosBits * ducerInchesPerBit; //0.00144177; // based on 150mm ducer/4096 bits = 0.00144177"/bit
+    rightDucerPosInch = rightDucerPosBits * ducerInchesPerBit; //0.00144177; // based on 150mm ducer/4096 bits = 0.00144177"/bit
 
     // update timeLeft
     timeLeft =  ( (cycleTarget-cycleCount) * period) / 60000.0;
@@ -938,158 +987,164 @@ int PrintMsg(String msg){
 //------------------------------------------------------------------------
 void UpdateDashboard(){
 
-    if(millis()-lastDashboardUpdate > webDashboardRefreshRate){
+  if(millis()-lastDashboardUpdate > webDashboardRefreshRate){
+    //build common messages
+    String StatusPostString = "";
+    StatusPostString = "{\"variable\":\""WEB_TEST_STATUS"\", \"value\": "+String(!paused);
+      StatusPostString += ", \"context\":{";
+        StatusPostString += "\"status\": \""+statusMsg+"\", ";
+        StatusPostString += "\"mode\": \""+String(testMode)+"\", ";
+        StatusPostString += "\"compstat\": \""+compressorMsg+"\", ";
+        StatusPostString += "\"tankpsi\": \""+String(tankPressurePSI,1)+"\", ";
+        StatusPostString += "\"errormsg\": \""+errorMsg+"\", ";
+        StatusPostString += "\"version\": \""+version+"\"";
+        StatusPostString += " }";
+      StatusPostString += "}";
+    String CyclesPostString = "";
+    CyclesPostString = "{\"variable\":\""WEB_CYCLES"\", \"value\": "+String(cycleCount);
+      CyclesPostString += ", \"context\":{";
+        CyclesPostString += "\"target\": \""+String(cycleTarget)+"\", ";
+        CyclesPostString += "\"ecount\": \""+String(errorLog)+"\", ";
+        CyclesPostString += "\"timeout\": \""+String(stateTimeout[0])+"\", ";
+        CyclesPostString += "\"period\": \""+String(period)+"\", ";
+        CyclesPostString += "\"window\": \""+String((windowExcursionLimit-1)*100,0)+"\"";
+        CyclesPostString += " }";
+      CyclesPostString += "}";
 
-      //build common messages
-      String StatusPostString = "";
-      StatusPostString = "{\"variable\":\""WEB_TEST_STATUS"\", \"value\": "+String(!paused);
-        StatusPostString += ", \"context\":{";
-          StatusPostString += "\"status\": \""+statusMsg+"\", ";
-          StatusPostString += "\"mode\": \""+String(testMode)+"\", ";
-          StatusPostString += "\"compstat\": \""+compressorMsg+"\", ";
-          StatusPostString += "\"errormsg\": \""+errorMsg+"\", ";
-          StatusPostString += "\"version\": \""+version+"\"";
-          StatusPostString += " }";
-        StatusPostString += "}";
-      String CyclesPostString = "";
-      CyclesPostString = "{\"variable\":\""WEB_CYCLES"\", \"value\": "+String(cycleCount);
-        CyclesPostString += ", \"context\":{";
-          CyclesPostString += "\"target\": \""+String(cycleTarget)+"\", ";
-          CyclesPostString += "\"ecount\": \""+String(errorLog)+"\", ";
-          CyclesPostString += "\"timeout\": \""+String(stateTimeout[0])+"\", ";
-          CyclesPostString += "\"period\": \""+String(period)+"\", ";
-          CyclesPostString += "\"window\": \""+String((windowExcursionLimit-1)*100,0)+"\"";
-          CyclesPostString += " }";
-        CyclesPostString += "}";
-
-      request.body = "[";
-      request.body += StatusPostString;
-      request.body += ", "+CyclesPostString;
-      request.body += ", { \"variable\":\""WEB_DEFLECTION"\", \"value\": "+String(deflection,3)+" }";
-      request.body += ", { \"variable\":\""WEB_DEFLECTION_AVG"\", \"value\": "+String(deflectionAvg,3)+" }";
-      if(testMode==0){
-        request.body += ", { \"variable\":\""WEB_FORCE_UP"\", \"value\": "+String(measuredPushForce,1)+" }";
-        request.body += ", { \"variable\":\""WEB_FORCE_DOWN"\", \"value\": "+String(measuredPullForce,1)+" }";
-      }
-      else{
-        request.body += ", { \"variable\":\""WEB_FORCE_UP"\", \"value\": "+String(state1Force,1)+" }";
-        request.body += ", { \"variable\":\""WEB_FORCE_DOWN"\", \"value\": "+String(state2Force,1)+" }";
-      }
-      request.body += ", { \"variable\":\""WEB_POSITION_UP"\", \"value\": "+String(positionAvg[1],3)+" }";
-      request.body += ", { \"variable\":\""WEB_POSITION_DOWN"\", \"value\": "+String(positionAvg[2],3)+" }";
-      request.body += ", { \"variable\":\""WEB_POSITION_RIGHT"\", \"value\": "+String(rightDucerPosInch,3)+" }";
-      request.body += ", { \"variable\":\""WEB_POSITION_LEFT"\", \"value\": "+String(leftDucerPosInch,3)+" }";
-      if(webUpdateConstants || millis()-lastWebConstantsUpdate > webUpdateConstantsRate) {
-        request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": "+String(forceSetting,1)+" }";
-        request.body += ", { \"variable\":\""WEB_DEFLECTION_LIMIT"\", \"value\": "+String(deflectionMax,3)+" }";
-        webUpdateConstants = false;
-      }
-      request.body += "]";
-      request.path = "/api/v1.6/collections/values/";
-      http.post(request, response, headers);
-
-      lastDashboardUpdate = millis();
+    request.body = "[";
+    request.body += StatusPostString;
+    request.body += ", "+CyclesPostString;
+    request.body += ", { \"variable\":\""WEB_CYCLE_TARGET"\", \"value\": "+String(cycleTarget)+" }";
+    request.body += ", { \"variable\":\""WEB_DEFLECTION"\", \"value\": "+String(deflection,3)+" }";
+    request.body += ", { \"variable\":\""WEB_DEFLECTION_AVG"\", \"value\": "+String(deflectionAvg,3)+" }";
+    if(testMode==0){
+      request.body += ", { \"variable\":\""WEB_FORCE_UP"\", \"value\": "+String(measuredPushForce,1)+" }";
+      request.body += ", { \"variable\":\""WEB_FORCE_DOWN"\", \"value\": "+String(measuredPullForce,1)+" }";
     }
+    else{
+      request.body += ", { \"variable\":\""WEB_FORCE_UP"\", \"value\": "+String(state1Force,1)+" }";
+      request.body += ", { \"variable\":\""WEB_FORCE_DOWN"\", \"value\": "+String(state2Force,1)+" }";
+    }
+    request.body += ", { \"variable\":\""WEB_PULL_SETTING"\", \"value\": "+String(pullZero,3)+" }";
+    request.body += ", { \"variable\":\""WEB_PUSH_SETTING"\", \"value\": "+String(pushZero,3)+" }";
+//    request.body += ", { \"variable\":\""WEB_S1_TIMEOUT"\", \"value\": "+String(stateTimeout[1])+" }";
+//    request.body += ", { \"variable\":\""WEB_S2_TIMEOUT"\", \"value\": "+String(stateTimeout[2])+" }";
+    request.body += ", { \"variable\":\""WEB_PERIOD"\", \"value\": "+String(period)+" }";
+    request.body += ", { \"variable\":\""WEB_POSITION_UP"\", \"value\": "+String(positionAvg[1],3)+" }";
+    request.body += ", { \"variable\":\""WEB_POSITION_DOWN"\", \"value\": "+String(positionAvg[2],3)+" }";
+    request.body += ", { \"variable\":\""WEB_POSITION_RIGHT"\", \"value\": "+String(rightDucerPosInch,3)+" }";
+    request.body += ", { \"variable\":\""WEB_POSITION_LEFT"\", \"value\": "+String(leftDucerPosInch,3)+" }";
+    if(webUpdateConstants || millis()-lastWebConstantsUpdate > webUpdateConstantsRate) {
+      request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": "+String(forceSetting,1)+" }";
+      request.body += ", { \"variable\":\""WEB_DEFLECTION_LIMIT"\", \"value\": "+String(deflectionMax,3)+" }";
+      webUpdateConstants = false;
+    }
+    request.body += "]";
+    request.path = "/api/v1.6/collections/values/";
+    http.post(request, response, headers);
+
+    lastDashboardUpdate = millis();
+  }
 }// UpdateDashboard
 
 
 //------------------------------------------------------------------------
 void PrintDiagnostic(String stateStr){
-    // Message Header "Time,SystemState,cycleCount,testNumber,ForceSet,PSI1set,PSI2set,pullPressurePSI,pushPressurePSI,DAC1_bits,leftDucerPosBits,rightDucerPosBits,leftDucerPosInch,rightDucerPosInch,lastNeutralLeft,lastNeutralRight"
-    String msg = "";
+  // Message Header "Time,SystemState,cycleCount,testNumber,ForceSet,PSI1set,PSI2set,pullPressurePSI,pushPressurePSI,DAC1_bits,leftDucerPosBits,rightDucerPosBits,leftDucerPosInch,rightDucerPosInch,lastNeutralLeft,lastNeutralRight"
+  String msg = "";
 
-    msg += String(Time.now()) + ",";
-    msg += stateStr + ",";
+  msg += String(Time.now()) + ",";
+  msg += stateStr + ",";
 //    msg += String(measuredPushForce,2) + ",";
 //    msg += String(measuredPullForce,2) + ",";
-    msg += String(cycleCount) + ",";
-    msg += String(testNumber) + ",";
-    msg += String(forceSetting,2) + ",";
-    msg += String(PSI1setting,2) + ","; //pull
-    msg += String(PSI2setting,2) + ","; //push
-    msg += String(pullPressurePSI,2) + ",";
-    msg += String(pushPressurePSI,2) + ",";
-    msg += String(DAC1_bits) + ",";
-    msg += String(leftDucerPosBits) + ",";
-    msg += String(rightDucerPosBits) + ",";
-    msg += String(leftDucerPosInch,3) + ",";
-    msg += String(rightDucerPosInch,3) + ",";
-    msg += String(lastNeutralLeft,3) + ",";
-    msg += String(lastNeutralRight,3);
+  msg += String(cycleCount) + ",";
+  msg += String(testNumber) + ",";
+  msg += String(forceSetting,2) + ",";
+  msg += String(PSI1setting,2) + ","; //pull
+  msg += String(PSI2setting,2) + ","; //push
+  msg += String(pullPressurePSI,2) + ",";
+  msg += String(pushPressurePSI,2) + ",";
+  msg += String(DAC1_bits) + ",";
+  msg += String(leftDucerPosBits) + ",";
+  msg += String(rightDucerPosBits) + ",";
+  msg += String(leftDucerPosInch,3) + ",";
+  msg += String(rightDucerPosInch,3) + ",";
+  msg += String(lastNeutralLeft,3) + ",";
+  msg += String(lastNeutralRight,3);
 
-    PrintMsg(msg);
+  PrintMsg(msg);
 }// PrintDiagnostic
 
 
 //------------------------------------------------------------------------
 void CycleInPhase(int numCycles, int force){
-    int i = 0;
-    int delayMS = 1000;
+  int i = 0;
+  int delayMS = 1000;
 
-    PrintMsg("");
-    PrintMsg("Running in-phase test for " + String(numCycles) + " cycles at " + String(force) + " lbs. on " + Time.timeStr());
+  PrintMsg("");
+  PrintMsg("Running in-phase test for " + String(numCycles) + " cycles at " + String(force) + " lbs. on " + Time.timeStr());
 
-    ResetNeutral();
-    SetForce(force);
+  ResetNeutral();
+  SetForce(force);
+  delay(delayMS);
+  ReadInputPins();
+  PrintDiagnostic("Neutral");
+  PrintStatusToLCD("Neutral");
+
+  for(i=0; i<numCycles; i++){
+    PushDown();
     delay(delayMS);
     ReadInputPins();
-    PrintDiagnostic("Neutral");
-    PrintStatusToLCD("Neutral");
+    PrintDiagnostic("Low");
+    PrintStatusToLCD("Low");
 
-    for(i=0; i<numCycles; i++){
-      PushDown();
-      delay(delayMS);
-      ReadInputPins();
-      PrintDiagnostic("Low");
-      PrintStatusToLCD("Low");
-
-    	PushUp();
-      delay(delayMS);
-      ReadInputPins();
-    	PrintDiagnostic("High");
-      PrintStatusToLCD("High");
-    }
-
-    ResetNeutral();
+  	PushUp();
     delay(delayMS);
     ReadInputPins();
-    PrintDiagnostic("Neutral");
-    PrintMsg("Test Complete.");
+  	PrintDiagnostic("High");
+    PrintStatusToLCD("High");
+  }
+
+  ResetNeutral();
+  delay(delayMS);
+  ReadInputPins();
+  PrintDiagnostic("Neutral");
+  PrintMsg("Test Complete.");
 }// CycleInPhase
 
 
 //------------------------------------------------------------------------
 void CycleOutOfPhase(int numCycles, int force){
-    int i = 0;
-    int delayMS = 500;
+  int i = 0;
+  int delayMS = 500;
 
-    PrintMsg("");
-    PrintMsg("Running out-of-phase test for " + String(numCycles) + " cycles at " + String(force) + " lbs. on " + Time.timeStr());
+  PrintMsg("");
+  PrintMsg("Running out-of-phase test for " + String(numCycles) + " cycles at " + String(force) + " lbs. on " + Time.timeStr());
 
-    ResetNeutral();
-    SetForce(force);
+  ResetNeutral();
+  SetForce(force);
+  delay(delayMS);
+  ReadInputPins();
+  PrintDiagnostic("Neutral");
+  PrintStatusToLCD("Neutral");
+
+  for(i=0; i<numCycles; i++){
+    TwistLeft();
     delay(delayMS);
     ReadInputPins();
-    PrintDiagnostic("Neutral");
-    PrintStatusToLCD("Neutral");
+    PrintDiagnostic("LeftDown");
+    PrintStatusToLCD("LeftDown");
 
-    for(i=0; i<numCycles; i++){
-        TwistLeft();
-        delay(delayMS);
-        ReadInputPins();
-        PrintDiagnostic("LeftDown");
-        PrintStatusToLCD("LeftDown");
+	TwistRight();
+    delay(delayMS);
+    ReadInputPins();
+    PrintDiagnostic("LeftUp");
+    PrintStatusToLCD("LeftUp");
+  }
 
-		TwistRight();
-        delay(delayMS);
-        ReadInputPins();
-        PrintDiagnostic("LeftUp");
-        PrintStatusToLCD("LeftUp");
-    }
+  KillRelays();
 
-    KillRelays();
-
-    PrintMsg("Test Complete.");
+  PrintMsg("Test Complete.");
 }// CycleOutOfPhase
 
 
