@@ -1,12 +1,12 @@
 // Regulator 1/DAC 1 is pull (down), Pressure Sensor 1
 // Regulator 2/DAC 2 is push (up), Pressure Sensor 0
 
-String version = "7.26.0"; // version number (month.day.rev)
+String version = "8.10.10"; // version number (month.day.rev)
 int testMode = 0; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing right only, 6=elastomer testing both cylinders, 7=ShockStop Up-only ISO, 8=Seatpost ISO Test (right only), 9=Aerobars Extension Up/Down)
 int cycleCount = 0;
 int cycleTarget = 100000;
 int stateTimeout[3] = {2000,2000,2000}; // time (ms) before automatic state change
-float zeroPressureThreshold = 0.25; // (psi) threshold whereby the software determines that a cylinder has reached zero psi.
+float zeroPressureThreshold = 0.050; // (psi) threshold whereby the software determines that a cylinder has reached zero psi.
 float windowExcursionLimit = 1.15; // % excursion allowed from defined calibration window (1.15 = 15% window)
 bool webUpdateFlag = true;
 bool errorChecking = true;
@@ -31,6 +31,9 @@ float mode7Ratio = 0.2; // ratio of downforce to upforce in up-only (mode 7) tes
 #define WEB_TEST_STATUS "56cc62f37625425f3cd6aeb2"
 #define WEB_PUSH_SETTING "59775e05c03f9769a7500695"
 #define WEB_PULL_SETTING "59775e0cc03f9769d9387961"
+#define WEB_S1_ZERO "598cd8e7c03f97745052ba5a"
+#define WEB_S2_ZERO "598cd8f0c03f9773b3d1c599"
+#define WEB_ZERO_THRESHOLD "598cdc56c03f9776bf36744c"
 #define WEB_S1_TIMEOUT "5977638cc03f976e9d662cb7"
 #define WEB_S2_TIMEOUT "59776393c03f976efe84e3fd"
 #define WEB_PERIOD "5979db17c03f973987af9917"
@@ -136,6 +139,7 @@ bool paused = true;
 bool statusUpdate = true;
 bool webUpdateConstants = true; // used to send data web dashboard that doesn't change often
 bool useI2C = true;
+bool useZeroPSI = false;
 bool compressorOn = false;
 int currentState = 0;  // current state (0=null,1 & 2 are mode-dependent)
 int DAC1_bits = 0; // current setting of DAC1
@@ -181,6 +185,8 @@ float lastNeutralLeft; // Most recent recorded neutral position
 float lastNeutralRight; // Most recent recorded neutral position
 float pullZero; // Most recent pressure reading while it's supposed to be zero psi
 float pushZero; // Most recent pressure reading while it's supposed to be zero psi
+float pullZeroAdjustment = 0; // zero pressure offset measured in calibrateZeroPSI
+float pushZeroAdjustment = 0; // zero pressure offset measured in calibrateZeroPSI
 
 // Flags for performing functions
 bool testRelay = false;
@@ -189,6 +195,7 @@ bool testCylinder = false;
 bool calibrateInPhase = false;
 bool twistFvD = false;
 bool calibratePressure = false;
+bool calibrateZeroPSI = false;
 bool calibrateWindow = false;
 bool generateFvD = false; // generates force vs displacement graph
 bool elastomerFvD = false; // generates force vs displacement graph for elastomers
@@ -355,9 +362,9 @@ bool CheckStateConditions(int currentState){
   case 1:
     if(stateTime > stateTimeout[currentState]) stateChange = true;
     if(stateChange){
-/*      if(testMode==2){// TBD: For the ShockStop Out of Phase test, this adjusts the state timeout in the off position until cylinder is reaching < 1 psi
-        pullZero = pullPressurePSI;
-        if(pullPressurePSI > zeroPressureThreshold){
+      pullZero = pullPressurePSI - pullZeroAdjustment;
+      if(testMode==2 && useZeroPSI){// TBD: For the ShockStop Out of Phase test, this adjusts the state timeout in the off position until cylinder is reaching < 1 psi
+        if(pullZero > zeroPressureThreshold){
           stateTimeout[currentState]=stateTimeout[currentState]+10;
         }
         else{
@@ -365,7 +372,6 @@ bool CheckStateConditions(int currentState){
         }
         period = stateTimeout[1]+stateTimeout[2];
       }
-*/
 
       // For most ISO test modes, adjust PUSH pressure settings
       if(testMode==1 || testMode==2 || testMode==7 || testMode==9){
@@ -394,11 +400,11 @@ bool CheckStateConditions(int currentState){
     }
     break;
   case 2:
-    if(stateTime > stateTimeout[currentState]){
-      stateChange = true;
-/*      if(testMode==2){// TBD: For the ShockStop Out of Phase test, this adjusts the state timeout in the off position until cylinder is reaching < 1 psi
-        pushZero = pushPressurePSI;
-        if(pushPressurePSI > zeroPressureThreshold){
+    if(stateTime > stateTimeout[currentState]) stateChange = true;
+    if(stateChange){
+      pushZero = pushPressurePSI - pushZeroAdjustment;
+      if(testMode==2 && useZeroPSI){// For the ShockStop Out of Phase test, this adjusts the state timeout in the off position until cylinder is reaching < the zeroPressureThreshold
+        if(pushZero > zeroPressureThreshold){
           stateTimeout[currentState]=stateTimeout[currentState]+10;
         }
         else{
@@ -406,7 +412,7 @@ bool CheckStateConditions(int currentState){
         }
         period = stateTimeout[1]+stateTimeout[2];
       }
-*/
+
       if(testMode==8){// for the seatpost test, this adjusts the state timeout in the off position until cylinder is reaching < 1 psi
         if(pullPressurePSI > zeroPressureThreshold){
           stateTimeout[currentState]=stateTimeout[currentState]+10;
@@ -416,8 +422,7 @@ bool CheckStateConditions(int currentState){
         }
         period = stateTimeout[1]+stateTimeout[2];
       }
-    }
-    if(stateChange){
+
       // For most ISO test modes, adjust PULL pressure settings
       if(testMode==1 || testMode==2 || testMode==3 || testMode==7 || testMode==9){
         state2Force = measuredPullForce;
@@ -725,11 +730,8 @@ void ReadInputPins(){
     // Read transducer (position) pins
     leftDucerPosBits = analogRead(leftDucerPin);
     rightDucerPosBits = analogRead(rightDucerPin);
-
-//    leftDucerPosInch = leftDucerPosBits * 0.00096118; // based on 100mm ducer/4096 bits = .00096118"/bit
-//    rightDucerPosInch = rightDucerPosBits * 0.00096118; // based on 100mm ducer/4096 bits = .00096118"/bit
-    leftDucerPosInch = leftDucerPosBits * ducerInchesPerBit; //0.00144177; // based on 150mm ducer/4096 bits = 0.00144177"/bit
-    rightDucerPosInch = rightDucerPosBits * ducerInchesPerBit; //0.00144177; // based on 150mm ducer/4096 bits = 0.00144177"/bit
+    leftDucerPosInch = leftDucerPosBits * ducerInchesPerBit;
+    rightDucerPosInch = rightDucerPosBits * ducerInchesPerBit;
 
     // update timeLeft
     timeLeft =  ( (cycleTarget-cycleCount) * period) / 60000.0;
@@ -746,6 +748,11 @@ void RunCalibrations(){
     if(calibratePressure){
         CalibratePressure();
         calibratePressure = false;
+    }
+
+    if(calibrateZeroPSI){
+      CalibrateZeroPSI();
+      calibrateZeroPSI = false;
     }
 
     if(generateFvD){
@@ -1025,10 +1032,13 @@ void UpdateDashboard(){
       request.body += ", { \"variable\":\""WEB_FORCE_UP"\", \"value\": "+String(state1Force,1)+" }";
       request.body += ", { \"variable\":\""WEB_FORCE_DOWN"\", \"value\": "+String(state2Force,1)+" }";
     }
-    request.body += ", { \"variable\":\""WEB_PULL_SETTING"\", \"value\": "+String(pullZero,3)+" }";
-    request.body += ", { \"variable\":\""WEB_PUSH_SETTING"\", \"value\": "+String(pushZero,3)+" }";
-//    request.body += ", { \"variable\":\""WEB_S1_TIMEOUT"\", \"value\": "+String(stateTimeout[1])+" }";
-//    request.body += ", { \"variable\":\""WEB_S2_TIMEOUT"\", \"value\": "+String(stateTimeout[2])+" }";
+    request.body += ", { \"variable\":\""WEB_PULL_SETTING"\", \"value\": "+String(PSI1setting,3)+" }";
+    request.body += ", { \"variable\":\""WEB_PUSH_SETTING"\", \"value\": "+String(PSI2setting,3)+" }";
+    request.body += ", { \"variable\":\""WEB_S1_ZERO"\", \"value\": "+String(pullZero,3)+" }";
+    request.body += ", { \"variable\":\""WEB_S2_ZERO"\", \"value\": "+String(pushZero,3)+" }";
+    request.body += ", { \"variable\":\""WEB_ZERO_THRESHOLD"\", \"value\": "+String(zeroPressureThreshold,3)+" }";
+    request.body += ", { \"variable\":\""WEB_S1_TIMEOUT"\", \"value\": "+String(stateTimeout[1])+" }";
+    request.body += ", { \"variable\":\""WEB_S2_TIMEOUT"\", \"value\": "+String(stateTimeout[2])+" }";
     request.body += ", { \"variable\":\""WEB_PERIOD"\", \"value\": "+String(period)+" }";
     request.body += ", { \"variable\":\""WEB_POSITION_UP"\", \"value\": "+String(positionAvg[1],3)+" }";
     request.body += ", { \"variable\":\""WEB_POSITION_DOWN"\", \"value\": "+String(positionAvg[2],3)+" }";
@@ -1146,6 +1156,17 @@ void CycleOutOfPhase(int numCycles, int force){
 
   PrintMsg("Test Complete.");
 }// CycleOutOfPhase
+
+
+//------------------------------------------------------------------------
+// Assumes current pressure setting is zero
+void CalibrateZeroPSI(){
+  KillRelays();
+  delay(2000);
+  ReadInputPins();
+  pullZeroAdjustment = pullPressurePSI;
+  pushZeroAdjustment = pushPressurePSI;
+}// CalibrateZeroPSI
 
 
 //------------------------------------------------------------------------
@@ -1843,6 +1864,10 @@ int WebRunFunction(String command) {
         calibratePressure = true;
         return 1;
     }
+    else if(command=="calibrateZeroPSI"){
+        calibrateZeroPSI = true;
+        return 1;
+    }
     else if(command=="calibrateAll"){
         twistFvD = true;
         calibrateInPhase = true;
@@ -1924,6 +1949,11 @@ int WebRunFunction(String command) {
         if(useI2C) useI2C = false;
         else useI2C = true;
         return useI2C;
+    }
+    else if(command=="useZeroPSI"){
+        if(useZeroPSI) useZeroPSI = false;
+        else useZeroPSI = true;
+        return useZeroPSI;
     }
     else if(command=="errorChecking"){
         if(errorChecking) errorChecking = false;
@@ -2074,5 +2104,4 @@ void TestPressureSensors(){
   delay(stateTimeout[0]);
 //  WriteLineToLCD("F"+String(forceSetting,1)+" ps " + String(pushPressurePSI,1) + " pl " + String(pullPressurePSI,2),2);
   KillRelays();
-
 }
