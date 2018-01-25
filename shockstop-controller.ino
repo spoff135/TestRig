@@ -1,7 +1,7 @@
 // Regulator 1/DAC 1 is pull (down), Pressure Sensor 1
 // Regulator 2/DAC 2 is push (up), Pressure Sensor 0
 
-String version = "11.21.0"; // version number (month.day.rev)
+String version = "1.22.1a"; // version number (month.day.rev)
 int testMode = 0; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing right only, 6=elastomer testing both cylinders, 7=ShockStop Up-only ISO, 8=Seatpost ISO Test (right only), 9=Aerobars Extension Up/Down)
 int cycleCount = 0;
 int cycleTarget = 100000;
@@ -24,6 +24,9 @@ Serial_LCD_SparkFun lcd = Serial_LCD_SparkFun();
 
 //UBIDOTS CODE
 #include "HttpClient.h"  // if using webIDE, use this: #include "HttpClient/HttpClient.h"
+
+/*
+//Test Rig One Variable IDs
 #define WEB_DEFLECTION "56cc63b6762542644cc8d2ef"
 #define WEB_DEFLECTION_AVG "56b671fb76254228866ee416"
 #define WEB_DEFLECTION_LIMIT "57acfcf47625425735b8b407"
@@ -42,6 +45,27 @@ Serial_LCD_SparkFun lcd = Serial_LCD_SparkFun();
 #define WEB_S2_TIMEOUT "59776393c03f976efe84e3fd"
 #define WEB_PERIOD "5979db17c03f973987af9917"
 #define WEB_CYCLE_TARGET "5979db98c03f973acdd79192"
+*/
+
+//Test Rig Two Variable IDs
+#define WEB_DEFLECTION "5a6608c6c03f970476ab839d"
+#define WEB_DEFLECTION_AVG "5a6608e3c03f970478f74d9e"
+#define WEB_DEFLECTION_LIMIT "5a66089dc03f970478f74d92"
+#define WEB_CYCLES "5a6608dbc03f9704e880034e"
+#define WEB_FORCE_S1 "5a6608bcc03f970474113e51"
+#define WEB_FORCE_S2 "5a6608c2c03f970478f74d99"
+#define WEB_FORCE_INPUT "5a6608d3c03f97056c78672a"
+#define WEB_POSITION_S1_RIGHT "5a6608b0c03f970478f74d96"
+#define WEB_POSITION_S2_RIGHT "5a6608b5c03f970478f74d98"
+#define WEB_POSITION_S1_MIN "5a6608a4c03f97047b758c6c"
+#define WEB_POSITION_S2_MIN "5a6608aac03f9704e8800346"
+#define WEB_TEST_STATUS "5a6608ccc03f970476ab839f"
+#define WEB_PUSH_FORCE_SETTING "5a660893c03f970478f74d91"
+#define WEB_PULL_FORCE_SETTING "5a66088bc03f970478f74d90"
+#define WEB_S1_TIMEOUT "5a6607d7c03f970476ab8383"
+#define WEB_S2_TIMEOUT "5a6607cec03f9703c6557126"
+#define WEB_PERIOD "5a6607b8c03f97032077c07f"
+#define WEB_CYCLE_TARGET "5a53a746c03f9737a2820c11"
 
 HttpClient http;
 // Headers currently need to be set at init, useful for API keys etc.
@@ -112,8 +136,8 @@ int maxResolution = 4095;
 int maxTestLoad_Elastomer = 200; // maximum test force used in GenerateElastomerFvD
 int maxTestLoad_Seatpost = 200; // maximum test force used in GenerateSeatpostFvD
 int maxTestLoad_Bar = 120; // maximum force (per cylinder) used in GenerateFvD
-    // Define I2C addresses
 int calibrateTwistLoad = 65; // maximum test force used in calibrateTwist
+    // Define I2C addresses
 int dataLoggerAddress = 8; // address of dataLogger
     // Regulator calibration settings
 int intercept100psi = 3550;
@@ -2014,7 +2038,7 @@ float FindPSISettingOffset(float targetForce, int regulatorNumber, int tempState
   }
 
   //tbd deleteme this is a stupid correction because I can't figure out why it always overshoots the desired force.
-  tempPSISetting -= 4;
+  tempPSISetting *= 0.9;
 
   tempPSISettingOffset = tempPSISetting - targetPSISetting;
 
