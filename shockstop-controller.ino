@@ -1,7 +1,7 @@
 // Regulator 1/DAC 1 is pull (down), Pressure Sensor 1
 // Regulator 2/DAC 2 is push (up), Pressure Sensor 0
 
-String version = "1.22.1a"; // version number (month.day.rev)
+String version = "1.25.1"; // version number (month.day.rev)
 int testMode = 0; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing right only, 6=elastomer testing both cylinders, 7=ShockStop Up-only ISO, 8=Seatpost ISO Test (right only), 9=Aerobars Extension Up/Down)
 int cycleCount = 0;
 int cycleTarget = 100000;
@@ -966,8 +966,14 @@ void UpdateDashboard(){
     request.body += ", { \"variable\":\""WEB_S1_TIMEOUT"\", \"value\": "+String(stateTimeout[1])+" }";
     request.body += ", { \"variable\":\""WEB_S2_TIMEOUT"\", \"value\": "+String(stateTimeout[2])+" }";
     request.body += ", { \"variable\":\""WEB_PERIOD"\", \"value\": "+String(period)+" }";
-    request.body += ", { \"variable\":\""WEB_POSITION_S1_RIGHT"\", \"value\": "+String(positionRight[1],3)+" }";
-    request.body += ", { \"variable\":\""WEB_POSITION_S2_RIGHT"\", \"value\": "+String(positionRight[2],3)+" }";
+    if(testMode==0){
+      request.body += ", { \"variable\":\""WEB_POSITION_S1_RIGHT"\", \"value\": "+String(rightDucerPosInch,3)+" }";
+      request.body += ", { \"variable\":\""WEB_POSITION_S2_RIGHT"\", \"value\": "+String(leftDucerPosInch,3)+" }";
+    }
+    else{
+      request.body += ", { \"variable\":\""WEB_POSITION_S1_RIGHT"\", \"value\": "+String(positionRight[1],3)+" }";
+      request.body += ", { \"variable\":\""WEB_POSITION_S2_RIGHT"\", \"value\": "+String(positionRight[2],3)+" }";
+    }
     request.body += ", { \"variable\":\""WEB_POSITION_S1_MIN"\", \"value\": "+String(refPositionRight[1]-refPositionRightWindow[1],3)+" }";
     request.body += ", { \"variable\":\""WEB_POSITION_S2_MIN"\", \"value\": "+String(refPositionRight[2]-refPositionRightWindow[2],3)+" }";
     if(webUpdateConstants || millis()-lastWebConstantsUpdate > webUpdateConstantsRate) {
@@ -1441,9 +1447,7 @@ void GenerateContinuousSeatpostFvD(){
     for(i=10; i<=maxLoad; i+=0.5){
       forceSetting = i;
       SetForce(i);
-      ReadInputPins();
-      PrintSeatpostFvD("FvD "+ String(i));
-      delay(125);
+      delay(250);
       ReadInputPins();
       PrintSeatpostFvD("FvD "+ String(i));
     }
