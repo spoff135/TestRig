@@ -1,0 +1,117 @@
+#include "Ubidots.h"
+
+#define TOKEN "BBFF-SiFICgFnXufNjniY53AAD9MLUfkTA9"
+
+Ubidots ubidots(TOKEN);
+
+const unsigned long UPDATE_PERIOD_MS = 30000;
+
+bool sensorReady = false;
+unsigned long lastUpdate = 0;
+char buf[64];
+
+double temperature = 60.1;
+double humidity = 50;
+
+String statusMsg = "status message";
+String errorMsg = "error message";
+String version = "v3";
+int testMode = 99;
+
+String statusContextMsg = "";
+
+void setup() {
+	Serial.begin(9600);
+	ubidots.setDeviceName("TestRig2");
+	ubidots.setDeviceLabel("TestRig2");
+	lastUpdate = millis() - UPDATE_PERIOD_MS - 5000;
+}
+
+void loop() {
+	if (millis() - lastUpdate >= UPDATE_PERIOD_MS) {
+		lastUpdate = millis();
+		String contextMsg = "mode=asdf$stat=asdf";
+		int len1 = contextMsg.length();
+
+		char context[len1];
+		sprintf(context, contextMsg);
+
+		ubidots.add("Status",lastUpdate,context);
+		ubidots.add("Time",lastUpdate);
+		ubidots.add("Temperature", temperature);
+		ubidots.sendAll();
+    Particle.publish("Temperature", String(temperature));
+
+/*
+	  bool bufferSent = false;
+	  if(ubidots.isDirty()){  // There are stored values in buffer
+	      bufferSent = ubidots.sendAll();
+	  }
+
+	  if(bufferSent){
+	      // Do something if values were sent properly
+	      Serial.println("Values sent by the device");
+	  }
+*/
+
+	}
+}
+
+/*
+		StatusPostString = "{\"variable\":\""WEB_TEST_STATUS"\", \"value\": "+String(!paused);
+      StatusPostString += ", \"context\":{";
+			StatusPostString += "\"status\": \""+statusMsg+"\", ";
+			StatusPostString += "\"mode\": \""+String(testMode)+"\", ";
+			StatusPostString += "\"errormsg\": \""+errorMsg+"\", ";
+			StatusPostString += "\"version\": \""+version+"\"";
+      StatusPostString += " }";
+      StatusPostString += "}";
+*/
+
+
+
+/*
+//UBIDOTS CODE
+#include "HttpClient.h"  // if using webIDE, use this: #include "HttpClient/HttpClient.h"
+
+#define WEB_CYCLE_TARGET "5a53a746c03f9737a2820c11"
+
+
+HttpClient http;
+// Headers currently need to be set at init, useful for API keys etc.
+http_header_t headers[] = {
+    { "Content-Type", "application/json" },
+    { "X-Auth-Token: BBFF-SiFICgFnXufNjniY53AAD9MLUfkTA9" },
+    { NULL, NULL } // NOTE: Always terminate headers with NULL
+};
+
+http_request_t request;
+http_response_t response;
+//UBIDOTS CODE
+
+long millisLast = 0;
+
+void setup()
+{    //UBIDOTS CODE
+    request.hostname = "industrial.api.ubidots.com";
+    request.port = 80;
+
+    millisLast = millis()-29000;
+//    Particle.publish("Version",version);
+}// Setup
+
+
+void loop()
+{
+      if( (millis() - millisLast) > 30000){
+              request.body = "[";
+              request.body += "{ \"variable\":\""WEB_CYCLE_TARGET"\", \"value\": 12345 }";
+              request.body += "]";
+              request.path = "/api/v1.6/collections/values/";
+              http.post(request, response, headers);
+              millisLast = millis();
+              Particle.publish("cycleCount","12345");
+      }
+
+}// loop
+*/

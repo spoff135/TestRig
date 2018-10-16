@@ -1,13 +1,14 @@
 // Regulator 1/DAC 1 is pull (down), Pressure Sensor 1
 // Regulator 2/DAC 2 is push (up), Pressure Sensor 0
 
-String version = "1.25.1"; // version number (month.day.rev)
+String version = "10.15.T1.8"; // version number (month.day.testrig.rev)
+String deviceName = "testrig1";// name of test device
 int testMode = 0; // current mode (0=no test running,1=in-phase test,2=out-of-phase test,3=realworld in-phase, 5=elastomer testing right only, 6=elastomer testing both cylinders, 7=ShockStop Up-only ISO, 8=Seatpost ISO Test (right only), 9=Aerobars Extension Up/Down)
 int cycleCount = 0;
 int cycleTarget = 100000;
-int stateTimeout[3] = {2000,2000,2000}; // time (ms) before automatic state change
+int stateTimeout[3] = {500,500,500}; // time (ms) before automatic state change
 float neutralPosThreshold = 1.000; // (in) thershold whereby the software determines that the seatpost has not fully returned to the neutral position (i.e. plastic deformation has occured)
-float windowExcursionLimit = 1.15; // % excursion allowed from defined calibration window (1.15 = 15% window)
+float windowExcursionLimit = 1.10; // % excursion allowed from defined calibration window (1.15 = 15% window)
 bool webUpdateFlag = true;
 bool errorChecking = true;
 int webDashboardRefreshRate = 5000; // web dashboard refresh rate (ms)
@@ -15,70 +16,16 @@ int webUpdateConstantsRate = 10000; // web constants refresh rate (ms)
 int testNumber = 1; // automatically incremented with each test
 float mode7Ratio = 0.2; // ratio of downforce to upforce in up-only (mode 7) test
 
-
 // Initialize the LCD library
 #include "Serial_LCD_SparkFun.h"
 Serial_LCD_SparkFun lcd = Serial_LCD_SparkFun();
 // LCD Initialization
 
-
+//UBIDOTS CODE7
+#include "Ubidots.h"
+#define TOKEN "BBFF-SiFICgFnXufNjniY53AAD9MLUfkTA9"
+Ubidots ubidots(TOKEN);
 //UBIDOTS CODE
-#include "HttpClient.h"  // if using webIDE, use this: #include "HttpClient/HttpClient.h"
-
-/*
-//Test Rig One Variable IDs
-#define WEB_DEFLECTION "56cc63b6762542644cc8d2ef"
-#define WEB_DEFLECTION_AVG "56b671fb76254228866ee416"
-#define WEB_DEFLECTION_LIMIT "57acfcf47625425735b8b407"
-#define WEB_CYCLES "56b672cb7625422dd8dbbf52"
-#define WEB_FORCE_S1 "56cc62a27625425dba666c80"
-#define WEB_FORCE_S2 "56cc666d7625427368e80d6e"
-#define WEB_FORCE_INPUT "56cc62db7625425f3cd6ae79"
-#define WEB_POSITION_S1_RIGHT "57923c897625423072003e71"
-#define WEB_POSITION_S2_RIGHT "57923c937625423072003ec0"
-#define WEB_POSITION_S1_MIN "57923cfe76254237a3daea81"
-#define WEB_POSITION_S2_MIN "57923d0476254237cebbf5c3"
-#define WEB_TEST_STATUS "56cc62f37625425f3cd6aeb2"
-#define WEB_PUSH_FORCE_SETTING "59775e05c03f9769a7500695"
-#define WEB_PULL_FORCE_SETTING "59775e0cc03f9769d9387961"
-#define WEB_S1_TIMEOUT "5977638cc03f976e9d662cb7"
-#define WEB_S2_TIMEOUT "59776393c03f976efe84e3fd"
-#define WEB_PERIOD "5979db17c03f973987af9917"
-#define WEB_CYCLE_TARGET "5979db98c03f973acdd79192"
-*/
-
-//Test Rig Two Variable IDs
-#define WEB_DEFLECTION "5a6608c6c03f970476ab839d"
-#define WEB_DEFLECTION_AVG "5a6608e3c03f970478f74d9e"
-#define WEB_DEFLECTION_LIMIT "5a66089dc03f970478f74d92"
-#define WEB_CYCLES "5a6608dbc03f9704e880034e"
-#define WEB_FORCE_S1 "5a6608bcc03f970474113e51"
-#define WEB_FORCE_S2 "5a6608c2c03f970478f74d99"
-#define WEB_FORCE_INPUT "5a6608d3c03f97056c78672a"
-#define WEB_POSITION_S1_RIGHT "5a6608b0c03f970478f74d96"
-#define WEB_POSITION_S2_RIGHT "5a6608b5c03f970478f74d98"
-#define WEB_POSITION_S1_MIN "5a6608a4c03f97047b758c6c"
-#define WEB_POSITION_S2_MIN "5a6608aac03f9704e8800346"
-#define WEB_TEST_STATUS "5a6608ccc03f970476ab839f"
-#define WEB_PUSH_FORCE_SETTING "5a660893c03f970478f74d91"
-#define WEB_PULL_FORCE_SETTING "5a66088bc03f970478f74d90"
-#define WEB_S1_TIMEOUT "5a6607d7c03f970476ab8383"
-#define WEB_S2_TIMEOUT "5a6607cec03f9703c6557126"
-#define WEB_PERIOD "5a6607b8c03f97032077c07f"
-#define WEB_CYCLE_TARGET "5a53a746c03f9737a2820c11"
-
-HttpClient http;
-// Headers currently need to be set at init, useful for API keys etc.
-http_header_t headers[] = {
-    { "Content-Type", "application/json" },
-    { "X-Auth-Token: Me72mxyaIELmctKM81Y0DVY3MTUJ4z" },
-    { NULL, NULL } // NOTE: Always terminate headers with NULL
-};
-
-http_request_t request;
-http_response_t response;
-//UBIDOTS CODE
-
 
 // Strain Gauge Setup Code
 #include "HX711.h"
@@ -110,8 +57,9 @@ int testRelayPin = 0; // gets reassigned in code and used by calibrate function 
 
 // Define analog pins
 // tbd deleteme int muxSelectorPin = WKP; // analog pin (used as digital) associated with
-int leftDucerPin = A2; //analog pin associated with the left transducer
-int rightDucerPin = A1; //analog pin associated with the right transducer
+// tbd deleteme - changed up A1 & A2 for TR#5 to test analog input
+int leftDucerPin = A1; //analog pin associated with the left transducer
+int rightDucerPin = A2; //analog pin associated with the right transducer
 
 // Define system hardware constants
 
@@ -204,6 +152,8 @@ float deflection; // Total deflection
 float deflectionAvg; // deflection running average
 float refDeflection; // Total deflection measured during most recent calibration
 float deflectionMax; // Total deflection limit
+float mode4posMax = 1000; // Maximum ducer position value for mode 4 operation before state change //tbd replace with more elegant method?
+float mode4posMin = -1000; // Minimum ducer position value for mode 4 operation before state change
 float lastNeutralLeft; // Most recent recorded neutral position
 float lastNeutralRight; // Most recent recorded neutral position
 
@@ -267,13 +217,14 @@ void setup()
     scale.tare(); //Reset the scale to 0
     lcd.clear();
 
-    //UBIDOTS CODE
-    request.hostname = "things.ubidots.com";
-    request.port = 80;
+    ubidots.setDeviceName("TestRig1");
+  	ubidots.setDeviceLabel("TestRig1");
 
     lcd.clear();
     lcd.setCursor(1,1);
     Serial1.print("Starting Program");
+
+    Particle.publish("Version",version);
 }// Setup
 
 
@@ -353,7 +304,7 @@ void CheckForErrors(){
       errorMsg = "Total defl error";
     }
     for(int i=1; i<=nStates; i++){
-      if(testMode!=5 && testMode!=8 && testMode!=9){ //Don't check left side for 1-cylinder test modes TBD Update w/other modes
+      if(testMode!=5 && testMode!=8 && testMode!=9 && testMode!=4){ //Don't check left side for 1-cylinder test modes TBD Update w/other modes
         if(abs(positionLeft[i]-refPositionLeft[i]) > refPositionLeftWindow[i]){
           errorFlag = true;
           errorMsg = "Error: LeftPos, S" + String(i);
@@ -378,6 +329,13 @@ bool CheckStateConditions(int currentState){
     break;
   case 1:
     if(stateTime > stateTimeout[currentState]) stateChange = true;
+
+    if(testMode==4){
+      if(rightDucerPosInch > mode4posMax){
+        stateChange = true;
+      }
+    }
+
     if(stateChange){
       state1Force = SG_measuredForceAbsolute; // Record load at end of state
 
@@ -407,6 +365,13 @@ bool CheckStateConditions(int currentState){
     break;
   case 2:
     if(stateTime > stateTimeout[currentState]) stateChange = true;
+
+    if(testMode==4){
+      if(rightDucerPosInch < mode4posMin){
+        stateChange = true;
+      }
+    }
+
     if(stateChange){
       state2Force = SG_measuredForceAbsolute; // Record load at end of state
 
@@ -471,25 +436,17 @@ void SetState(int currentState){
         break;
       }
     }
-// test mode 4 doesn't work because deflection is only calculated based on 2 states
-/*    else if(testMode==4){ // real-world out-of-phase test
-        switch (currentState) {
-        case 1:
-            KillRelays();
-            break;
-        case 2:
-            LeftDown();
-            break;
-        case 3:
-            KillRelays();
-            break;
-        case 4:
-            RightDown();
-            cycleCount++;
-            break;
-        }
+    else if(testMode==4){ // Bushing Test Rig Up/Down (use right cylinder, limit by position)
+      switch (currentState) {
+      case 1:
+        RightUp();
+        break;
+      case 2:
+        RightDown();
+        cycleCount++;
+        break;
+      }
     }
-*/
     else if(testMode==5){ // elastomer test fixture (right cylinder only)
       switch (currentState) {
       case 1:
@@ -564,28 +521,22 @@ void SetMode(int testMode){
       testMode = 0;
       nStates = 0;
       break;
-
     case 1:  // in-phase ISO test
       testMode = 1;
       nStates = 2;
       break;
-
     case 2:  // out-of-phase ISO test
       testMode = 2;
       nStates = 2;
       break;
-
     case 3:  // in-phase real world test
       testMode = 3;
       nStates = 2;
       break;
-// test mode 4 doesn't work because deflection is only calculated based on 2 states
-/*
-    case 4:  // out-of-phase real world test
+    case 4: // Bushing Test Rig
       testMode = 4;
-      nStates = 4;
+      nStates = 2;
       break;
-*/
     case 5: // elastomer test fixture (right cylinder only)
       testMode = 5;
       nStates = 2;
@@ -626,7 +577,7 @@ float CalculateDeflection(){
     if(rightDef < 0) rightDef = rightDef*-1;
 
     float totalDef = 0;
-    if(testMode==5 || testMode==8 || testMode==9){// for seatpost ISO test, just return right deflection
+    if(testMode==5 || testMode==8 || testMode==9 || testMode==4){// for seatpost ISO test, just return right deflection
        totalDef = rightDef;
     }
     else{
@@ -733,14 +684,19 @@ void RunCalibrations(){
 
   bool stateChange = false;
   if(calibrateWindow){
-    if(testMode!=4){
-      ResetNeutral();
-    }
+    ResetNeutral();
 
     if(testMode==8){//tbd set this up for all modes, not just ISO seatpost
       PSI1settingOffset = FindPSISettingOffset(forceSetting,1,1);
     }
     SetForce(forceSetting); //Adjust force after determining offset
+
+    //for mode 4, reset min/max transducer values
+    if(testMode==4){
+      mode4posMin = -1000; //tbd replace with more elegant method?
+      mode4posMax = 1000;
+    }
+
 
     // run through each state and record the final deflection to set deflectionWindow
     int i;
@@ -764,6 +720,7 @@ void RunCalibrations(){
 
         positionLeft[i] = leftDucerPosInch; // added these so "CalculateDeflection" has something to reference.
         positionRight[i] = rightDucerPosInch;
+
       }
     }
 
@@ -777,11 +734,14 @@ void RunCalibrations(){
       refPositionRightWindow[i] = (refDeflection*(windowExcursionLimit-1));
     }
 
+    if(testMode==4){
+      mode4posMin = positionRight[2] + refPositionRightWindow[2];
+      mode4posMax = positionRight[1] - refPositionRightWindow[1];
+    }
+
     calibrateWindow = false;
     PrintStatusToLCD("");
-    if(testMode!=4){
-      ResetNeutral();
-    }
+    ResetNeutral();
     delay(2000);
   }
 }// RunCalibrations
@@ -926,64 +886,58 @@ int PrintMsg(String msg){
 void UpdateDashboard(){
 
   if(millis()-lastDashboardUpdate > webDashboardRefreshRate){
-    //build common messages
-    String StatusPostString = "";
-    StatusPostString = "{\"variable\":\""WEB_TEST_STATUS"\", \"value\": "+String(!paused);
-      StatusPostString += ", \"context\":{";
-        StatusPostString += "\"status\": \""+statusMsg+"\", ";
-        StatusPostString += "\"mode\": \""+String(testMode)+"\", ";
-        StatusPostString += "\"errormsg\": \""+errorMsg+"\", ";
-        StatusPostString += "\"version\": \""+version+"\"";
-        StatusPostString += " }";
-      StatusPostString += "}";
-    String CyclesPostString = "";
-    CyclesPostString = "{\"variable\":\""WEB_CYCLES"\", \"value\": "+String(cycleCount);
-      CyclesPostString += ", \"context\":{";
-        CyclesPostString += "\"target\": \""+String(cycleTarget)+"\", ";
-        CyclesPostString += "\"ecount\": \""+String(errorLog)+"\", ";
-        CyclesPostString += "\"timeout\": \""+String(stateTimeout[0])+"\", ";
-        CyclesPostString += "\"period\": \""+String(period)+"\", ";
-        CyclesPostString += "\"window\": \""+String((windowExcursionLimit-1)*100,0)+"\"";
-        CyclesPostString += " }";
-      CyclesPostString += "}";
+    //build status message context
+    String StatusContextMsg = "";
+    StatusContextMsg += "status="+statusMsg;
+    StatusContextMsg += "$mode="+String(testMode);
+    StatusContextMsg += "$errormsg="+errorMsg;
+    StatusContextMsg += "$version="+version;
 
-    request.body = "[";
-    request.body += StatusPostString;
-    request.body += ", "+CyclesPostString;
-    request.body += ", { \"variable\":\""WEB_CYCLE_TARGET"\", \"value\": "+String(cycleTarget)+" }";
-    request.body += ", { \"variable\":\""WEB_DEFLECTION"\", \"value\": "+String(deflection,3)+" }";
-    request.body += ", { \"variable\":\""WEB_DEFLECTION_AVG"\", \"value\": "+String(deflectionAvg,3)+" }";
+		int len1 = StatusContextMsg.length();
+		char context1[len1];
+		sprintf(context1, StatusContextMsg);
+
+		ubidots.add("Status",lastDashboardUpdate/1000,context1);
+
+    //build cycle count message context
+    String CyclesContextMsg = "";
+    CyclesContextMsg += "target="+String(cycleTarget);
+    CyclesContextMsg += "$ecount="+String(errorLog);
+    CyclesContextMsg += "$timeout="+String(mode4posMin);//stateTimeout[0]);
+    CyclesContextMsg += "$period="+String(mode4posMax);//period);
+    CyclesContextMsg += "$window="+String((windowExcursionLimit-1)*100,0);
+
+    int len2 = CyclesContextMsg.length();
+		char context2[len2];
+		sprintf(context2, CyclesContextMsg);
+
+    ubidots.add("Cycles",cycleCount,context2);
+
+    // add other data points
+    ubidots.add("Deflection",deflection);
+    ubidots.add("DeflectionAvg",deflectionAvg);
     if(testMode==0){
-      request.body += ", { \"variable\":\""WEB_FORCE_S1"\", \"value\": "+String(SG_measuredForceAbsolute,1)+" }";
-      request.body += ", { \"variable\":\""WEB_FORCE_S2"\", \"value\": "+String(SG_measuredForceAbsolute,1)+" }";
+      ubidots.add("State1Force",SG_measuredForceAbsolute);
+      ubidots.add("State2Force",SG_measuredForceAbsolute);
     }
     else{
-      request.body += ", { \"variable\":\""WEB_FORCE_S1"\", \"value\": "+String(state1Force,1)+" }";
-      request.body += ", { \"variable\":\""WEB_FORCE_S2"\", \"value\": "+String(state2Force,1)+" }";
+      ubidots.add("State1Force",state1Force);
+      ubidots.add("State2Force",state2Force);
     }
-    request.body += ", { \"variable\":\""WEB_PULL_FORCE_SETTING"\", \"value\": "+String( ((PSI1setting+PSI1settingOffset) * pullArea) ,3)+" }";
-    request.body += ", { \"variable\":\""WEB_PUSH_FORCE_SETTING"\", \"value\": "+String( ((PSI2setting+PSI2settingOffset) * pushArea) ,3)+" }";
-    request.body += ", { \"variable\":\""WEB_S1_TIMEOUT"\", \"value\": "+String(stateTimeout[1])+" }";
-    request.body += ", { \"variable\":\""WEB_S2_TIMEOUT"\", \"value\": "+String(stateTimeout[2])+" }";
-    request.body += ", { \"variable\":\""WEB_PERIOD"\", \"value\": "+String(period)+" }";
     if(testMode==0){
-      request.body += ", { \"variable\":\""WEB_POSITION_S1_RIGHT"\", \"value\": "+String(rightDucerPosInch,3)+" }";
-      request.body += ", { \"variable\":\""WEB_POSITION_S2_RIGHT"\", \"value\": "+String(leftDucerPosInch,3)+" }";
+      ubidots.add("State1Pos",rightDucerPosInch);
+      ubidots.add("State2Pos",leftDucerPosInch);
     }
     else{
-      request.body += ", { \"variable\":\""WEB_POSITION_S1_RIGHT"\", \"value\": "+String(positionRight[1],3)+" }";
-      request.body += ", { \"variable\":\""WEB_POSITION_S2_RIGHT"\", \"value\": "+String(positionRight[2],3)+" }";
+      ubidots.add("State1Pos",positionRight[1]);
+      ubidots.add("State2Pos",positionRight[2]);
     }
-    request.body += ", { \"variable\":\""WEB_POSITION_S1_MIN"\", \"value\": "+String(refPositionRight[1]-refPositionRightWindow[1],3)+" }";
-    request.body += ", { \"variable\":\""WEB_POSITION_S2_MIN"\", \"value\": "+String(refPositionRight[2]-refPositionRightWindow[2],3)+" }";
-    if(webUpdateConstants || millis()-lastWebConstantsUpdate > webUpdateConstantsRate) {
-      request.body += ", { \"variable\":\""WEB_FORCE_INPUT"\", \"value\": "+String(forceSetting,1)+" }";
-      request.body += ", { \"variable\":\""WEB_DEFLECTION_LIMIT"\", \"value\": "+String(deflectionMax,3)+" }";
-      webUpdateConstants = false;
-    }
-    request.body += "]";
-    request.path = "/api/v1.6/collections/values/";
-    http.post(request, response, headers);
+    ubidots.add("State1PosMin",refPositionRight[1]-refPositionRightWindow[1]);
+    ubidots.add("State2PosMin",refPositionRight[2]-refPositionRightWindow[2]);
+
+    ubidots.sendAll();
+
+    Particle.publish("lastUpdate", String(lastDashboardUpdate));
 
     lastDashboardUpdate = millis();
   }
@@ -1444,10 +1398,10 @@ void GenerateContinuousSeatpostFvD(){
   for(maxLoad = maxStart; maxLoad <= maxTestLoad_Seatpost; maxLoad+=10){
     // inner loop records force vs displacement from 0 to maxLoad
     RightDown();
-    for(i=10; i<=maxLoad; i+=0.5){
+    for(i=10; i<=maxLoad; i+=1){
       forceSetting = i;
       SetForce(i);
-      delay(250);
+      delay(125);
       ReadInputPins();
       PrintSeatpostFvD("FvD "+ String(i));
     }
@@ -1917,7 +1871,12 @@ int WebRunFunction(String command) {
         return displayMode;
     }
     else if(command=="status"){
+      Particle.publish("cycleCount",String(cycleCount));
       return cycleCount;
+    }
+    else if(command=="version"){
+      Particle.publish("Version",version);
+      return 1;
     }
     else if(command=="kill"){
       KillRelays();
